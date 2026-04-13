@@ -9,7 +9,10 @@ function App() {
   const dragStartWidth = useRef(0);
   const sidebarRef = useRef<HTMLDivElement>(null);
 
-  // 拖拽调整宽度逻辑
+  // 拖拽预览状态：拖拽中显示预览线，松手后才真正改变宽度
+  const [previewWidth, setPreviewWidth] = useState<number | null>(null);
+
+  // 拖拽开始
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     isDragging.current = true;
     dragStartX.current = e.screenX;
@@ -25,8 +28,8 @@ function App() {
       // 向左拖拽增大宽度（因为侧边栏在右侧）
       const delta = dragStartX.current - e.screenX;
       const newWidth = Math.max(280, Math.min(1200, dragStartWidth.current + delta));
-      setSidebarWidth(newWidth);
-      invoke("resize_sidebar", { width: Math.round(newWidth) });
+      // 只更新预览宽度，不实际调整窗口
+      setPreviewWidth(newWidth);
     };
 
     const handleMouseUp = () => {
@@ -34,6 +37,16 @@ function App() {
         isDragging.current = false;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
+
+        // 松手时才真正调整窗口宽度
+        setPreviewWidth((finalWidth) => {
+          if (finalWidth !== null) {
+            const w = Math.round(finalWidth);
+            setSidebarWidth(w);
+            invoke("resize_sidebar", { width: w });
+          }
+          return null;
+        });
       }
     };
 
@@ -78,9 +91,21 @@ function App() {
 
   return (
     <div className="sidebar-container" ref={sidebarRef}>
+      {/* 拖拽预览线：拖拽时显示目标宽度位置 */}
+      {previewWidth !== null && (
+        <div
+          className="drag-preview-line"
+          style={{ left: `${Math.max(0, sidebarWidth - previewWidth)}px` }}
+        >
+          <div className="drag-preview-label">
+            {Math.round(previewWidth)}px
+          </div>
+        </div>
+      )}
+
       {/* 左边缘拖拽手柄 */}
       <div
-        className="drag-handle"
+        className={`drag-handle ${previewWidth !== null ? 'dragging' : ''}`}
         onMouseDown={handleMouseDown}
       >
         <div className="drag-handle-indicator" />
