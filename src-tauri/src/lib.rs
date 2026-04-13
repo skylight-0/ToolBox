@@ -1,4 +1,4 @@
-use tauri::{Manager, PhysicalPosition, PhysicalSize, State};
+use tauri::{Manager, LogicalPosition, LogicalSize, Position, Size, State};
 use tauri_plugin_global_shortcut::ShortcutState;
 use std::sync::Mutex;
 
@@ -9,19 +9,23 @@ struct AppState {
 // 获取屏幕尺寸并定位窗口到右侧
 fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
     if let Ok(Some(monitor)) = window.current_monitor() {
-        let screen_size = monitor.size();
-        let screen_pos = monitor.position();
+        let scale_factor = monitor.scale_factor();
+        let screen_size = monitor.size().to_logical::<f64>(scale_factor);
+        let screen_pos = monitor.position().to_logical::<f64>(scale_factor);
+        
         let screen_height = screen_size.height;
         let screen_width = screen_size.width;
 
-        // 窗口定位到屏幕右侧
-        let x = screen_pos.x + (screen_width - width) as i32;
+        // 窗口定位到屏幕右侧 (前端传来的 width 是逻辑/CSS像素)
+        let logical_width = width as f64;
+        let x = screen_pos.x + (screen_width - logical_width);
         let y = screen_pos.y;
 
-        let _ = window.set_size(PhysicalSize::new(width, screen_height));
-        let _ = window.set_position(PhysicalPosition::new(x, y));
+        let _ = window.set_size(Size::Logical(LogicalSize::new(logical_width, screen_height)));
+        let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
     }
 }
+
 
 // 切换侧边栏显示/隐藏
 #[tauri::command]
