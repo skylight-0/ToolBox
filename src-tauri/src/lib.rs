@@ -29,20 +29,28 @@ fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
 
 use tauri::Emitter;
 
-// 切换侧边栏显示/隐藏
-#[tauri::command]
-fn toggle_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>) {
-    if let Ok(visible) = window.is_visible() {
-        if visible {
-            let _ = window.emit("hide-sidebar", ());
-        } else {
-            let width = *state.sidebar_width.lock().unwrap();
-            position_window_right(&window, width);
-            let _ = window.emit("show-sidebar", ());
-            let _ = window.show();
-            let _ = window.set_focus();
+// 供前端或底部托盘和快捷键统一调用的侧边栏切换逻辑
+fn toggle_sidebar_window(app_handle: &tauri::AppHandle) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        if let Ok(visible) = window.is_visible() {
+            if visible {
+                let _ = window.emit("hide-sidebar", ());
+            } else {
+                let state: State<'_, AppState> = app_handle.state();
+                let width = *state.sidebar_width.lock().unwrap();
+                position_window_right(&window, width);
+                let _ = window.emit("show-sidebar", ());
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
         }
     }
+}
+
+// 切换侧边栏显示/隐藏（给前端命令用）
+#[tauri::command]
+fn toggle_sidebar(app: tauri::AppHandle) {
+    toggle_sidebar_window(&app);
 }
 
 // 供前端在滑出动画结束后实际隐藏窗口的命令
@@ -82,23 +90,7 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        if let Some(window) = app.get_webview_window("main") {
-                            if let Ok(visible) = window.is_visible() {
-                                if visible {
-                                    // 告诉前端播放退出动画，等前端播完以后再去调 do_hide_sidebar
-                                    let _ = window.emit("hide-sidebar", ());
-                                } else {
-                                    // 从状态中获取当前宽度
-                                    let state: State<'_, AppState> = app.state();
-                                    let width = *state.sidebar_width.lock().unwrap();
-                                    
-                                    position_window_right(&window, width);
-                                    let _ = window.emit("show-sidebar", ());
-                                    let _ = window.show();
-                                    let _ = window.set_focus();
-                                }
-                            }
-                        }
+                        toggle_sidebar_window(app);
                     }
                 })
                 .build(),
@@ -118,6 +110,38 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
             }
+
+            // ===== 添加系统托盘 =====
+            let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "退出 ToolBox", true, None::<&str>)?;
+            let show_i = tauri::menu::MenuItem::with_id(app, "show", "显示/隐藏", true, None::<&str>)?;
+            let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
+
+            let _tray = tauri::tray::TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("ToolBox 侧边栏工具")
+                .menu(&menu)
+                .on_menu_event(|app, event| {
+                    match event.id.as_ref() {
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        "show" => {
+                            toggle_sidebar_window(app);
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        ..
+                    } = event {
+                        toggle_sidebar_window(tray.app_handle());
+                    }
+                })
+                .build(app)?;
+
             Ok(())
         })
         .run(tauri::generate_context!())
