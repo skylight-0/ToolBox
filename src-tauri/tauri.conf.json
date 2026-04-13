@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "toolbox",
+  "productName": "ToolBox",
   "version": "0.1.0",
   "identifier": "com.zhao.toolbox",
   "build": {
@@ -12,9 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "toolbox",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "ToolBox",
+        "width": 400,
+        "height": 1080,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false
       }
     ],
     "security": {

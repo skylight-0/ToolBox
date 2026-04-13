@@ -1,116 +1,409 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
+/* ============================================
+   ToolBox 侧边栏 - 全局样式
+   ============================================ */
 
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafb);
-}
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
+* {
   margin: 0;
-  padding-top: 10vh;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+:root {
+  /* 主色调 */
+  --bg-primary: rgba(15, 15, 25, 0.92);
+  --bg-secondary: rgba(30, 30, 50, 0.6);
+  --bg-card: rgba(255, 255, 255, 0.04);
+  --bg-card-hover: rgba(255, 255, 255, 0.08);
+  --bg-card-active: rgba(255, 255, 255, 0.12);
+
+  /* 文字颜色 */
+  --text-primary: rgba(255, 255, 255, 0.95);
+  --text-secondary: rgba(255, 255, 255, 0.55);
+  --text-tertiary: rgba(255, 255, 255, 0.35);
+
+  /* 强调色 */
+  --accent-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --accent-blue: #667eea;
+  --accent-purple: #764ba2;
+  --accent-glow: rgba(102, 126, 234, 0.2);
+
+  /* 边框 */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-light: rgba(255, 255, 255, 0.1);
+
+  /* 阴影 */
+  --shadow-lg: 0 25px 60px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.2);
+
+  /* 圆角 */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  /* 字体 */
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
+/* ============================================
+   侧边栏容器
+   ============================================ */
+.sidebar-container {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-primary);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border-left: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 背景装饰光效 */
+.sidebar-container::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(
+    ellipse at 20% 20%,
+    rgba(102, 126, 234, 0.06) 0%,
+    transparent 50%
+  ),
+  radial-gradient(
+    ellipse at 80% 80%,
+    rgba(118, 75, 162, 0.04) 0%,
+    transparent 50%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ============================================
+   拖拽手柄
+   ============================================ */
+.drag-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease;
+}
+
+.drag-handle:hover {
+  background: rgba(102, 126, 234, 0.15);
+}
+
+.drag-handle:hover .drag-handle-indicator {
+  opacity: 1;
+  height: 60px;
+}
+
+.drag-handle-indicator {
+  width: 3px;
+  height: 40px;
+  border-radius: 3px;
+  background: var(--accent-gradient);
+  opacity: 0;
+  transition: all 0.25s ease;
+}
+
+.drag-handle:active {
+  background: rgba(102, 126, 234, 0.25);
+}
+
+.drag-handle:active .drag-handle-indicator {
+  opacity: 1;
+  height: 80px;
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+/* ============================================
+   侧边栏主体内容
+   ============================================ */
+.sidebar-content {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  padding: 0 20px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  z-index: 1;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
+/* 自定义滚动条 */
+.sidebar-content::-webkit-scrollbar {
+  width: 4px;
 }
 
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
+.sidebar-content::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.row {
+.sidebar-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.sidebar-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ============================================
+   顶部时间区域
+   ============================================ */
+.sidebar-header {
+  padding: 36px 4px 28px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 24px;
+}
+
+.time-display {
+  font-size: 48px;
+  font-weight: 200;
+  letter-spacing: -2px;
+  line-height: 1.1;
+  background: linear-gradient(
+    to right,
+    var(--text-primary) 0%,
+    rgba(255, 255, 255, 0.7) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 6px;
+}
+
+.date-display {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  letter-spacing: 0.5px;
+}
+
+/* ============================================
+   区块标题
+   ============================================ */
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  margin-bottom: 14px;
   display: flex;
-  justify-content: center;
+  align-items: center;
+  gap: 8px;
 }
 
-a {
+.section-icon {
+  font-size: 14px;
+}
+
+/* ============================================
+   快捷工具网格
+   ============================================ */
+.tools-section {
+  margin-bottom: 28px;
+}
+
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.tool-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.tool-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent-gradient);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.tool-card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-light);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.tool-card:hover::before {
+  opacity: 0.05;
+}
+
+.tool-card:active {
+  background: var(--bg-card-active);
+  transform: translateY(0);
+}
+
+.tool-icon {
+  font-size: 22px;
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+}
+
+.tool-info {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.tool-label {
+  font-size: 13px;
   font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+  color: var(--text-primary);
+  line-height: 1.3;
 }
 
-a:hover {
-  color: #535bf2;
+.tool-desc {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.3;
 }
 
-h1 {
+/* ============================================
+   快捷键提示
+   ============================================ */
+.shortcuts-section {
+  margin-bottom: 28px;
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shortcut-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  transition: background 0.2s ease;
+}
+
+.shortcut-item:hover {
+  background: var(--bg-card-hover);
+}
+
+.shortcut-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.shortcut-key {
+  font-size: 11px;
+  font-weight: 500;
+  font-family: 'Inter', monospace;
+  color: var(--accent-blue);
+  background: rgba(102, 126, 234, 0.1);
+  border: 1px solid rgba(102, 126, 234, 0.2);
+  border-radius: 6px;
+  padding: 3px 10px;
+  letter-spacing: 0.3px;
+}
+
+.shortcut-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* ============================================
+   底部信息
+   ============================================ */
+.sidebar-footer {
+  margin-top: auto;
+  padding: 20px 4px 24px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.footer-text {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.5px;
   text-align: center;
 }
 
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
+/* ============================================
+   动画
+   ============================================ */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
   }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
+
+.sidebar-header {
+  animation: fadeInUp 0.4s ease 0.05s both;
+}
+
+.tools-section {
+  animation: fadeInUp 0.4s ease 0.1s both;
+}
+
+.shortcuts-section {
+  animation: fadeInUp 0.4s ease 0.15s both;
+}
+
+.sidebar-footer {
+  animation: fadeInUp 0.4s ease 0.2s both;
+}
+
+/* 工具卡片交错动画 */
+.tool-card:nth-child(1) { animation: fadeInUp 0.35s ease 0.12s both; }
+.tool-card:nth-child(2) { animation: fadeInUp 0.35s ease 0.16s both; }
+.tool-card:nth-child(3) { animation: fadeInUp 0.35s ease 0.20s both; }
+.tool-card:nth-child(4) { animation: fadeInUp 0.35s ease 0.24s both; }
+.tool-card:nth-child(5) { animation: fadeInUp 0.35s ease 0.28s both; }
+.tool-card:nth-child(6) { animation: fadeInUp 0.35s ease 0.32s both; }
