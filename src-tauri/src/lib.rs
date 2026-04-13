@@ -27,19 +27,28 @@ fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
 }
 
 
+use tauri::Emitter;
+
 // 切换侧边栏显示/隐藏
 #[tauri::command]
 fn toggle_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>) {
     if let Ok(visible) = window.is_visible() {
         if visible {
-            let _ = window.hide();
+            let _ = window.emit("hide-sidebar", ());
         } else {
             let width = *state.sidebar_width.lock().unwrap();
             position_window_right(&window, width);
+            let _ = window.emit("show-sidebar", ());
             let _ = window.show();
             let _ = window.set_focus();
         }
     }
+}
+
+// 供前端在滑出动画结束后实际隐藏窗口的命令
+#[tauri::command]
+fn do_hide_sidebar(window: tauri::WebviewWindow) {
+    let _ = window.hide();
 }
 
 // 调整侧边栏宽度（由前端拖拽时调用）
@@ -68,13 +77,15 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             if let Ok(visible) = window.is_visible() {
                                 if visible {
-                                    let _ = window.hide();
+                                    // 告诉前端播放退出动画，等前端播完以后再去调 do_hide_sidebar
+                                    let _ = window.emit("hide-sidebar", ());
                                 } else {
                                     // 从状态中获取当前宽度
                                     let state: State<'_, AppState> = app.state();
                                     let width = *state.sidebar_width.lock().unwrap();
                                     
                                     position_window_right(&window, width);
+                                    let _ = window.emit("show-sidebar", ());
                                     let _ = window.show();
                                     let _ = window.set_focus();
                                 }
@@ -84,7 +95,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![toggle_sidebar, resize_sidebar])
+        .invoke_handler(tauri::generate_handler![toggle_sidebar, resize_sidebar, do_hide_sidebar])
         .setup(|app| {
             // 初始化状态管理器
             app.manage(AppState {

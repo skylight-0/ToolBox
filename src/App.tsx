@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
 function App() {
@@ -8,6 +9,34 @@ function App() {
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
   const sidebarRef = useRef<HTMLDivElement>(null);
+
+  // 动画状态
+  const [isClosing, setIsClosing] = useState(false);
+  const [isOpening, setIsOpening] = useState(false);
+
+  // 监听后端发来的显隐事件
+  useEffect(() => {
+    const unlistenShow = listen("show-sidebar", () => {
+      setIsClosing(false);
+      setIsOpening(true);
+      // 等待进场动画结束后移除状态
+      setTimeout(() => setIsOpening(false), 300);
+    });
+
+    const unlistenHide = listen("hide-sidebar", () => {
+      setIsClosing(true);
+      // 离场动画播放完后，通知后端真正隐藏窗口
+      setTimeout(() => {
+        setIsClosing(false);
+        invoke("do_hide_sidebar");
+      }, 250); 
+    });
+
+    return () => {
+      unlistenShow.then(f => f());
+      unlistenHide.then(f => f());
+    };
+  }, []);
 
   // 拖拽预览状态：拖拽中显示预览线，松手后才真正改变宽度
   const [previewWidth, setPreviewWidth] = useState<number | null>(null);
@@ -90,7 +119,7 @@ function App() {
   ];
 
   return (
-    <div className="sidebar-container" ref={sidebarRef}>
+    <div className={`sidebar-container ${isOpening ? 'slide-in' : ''} ${isClosing ? 'slide-out' : ''}`} ref={sidebarRef}>
       {/* 拖拽预览线：拖拽时显示目标宽度位置 */}
       {previewWidth !== null && (
         <div
