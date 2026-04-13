@@ -14,27 +14,45 @@ function App() {
   const [isClosing, setIsClosing] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
 
-  // 监听后端发来的显隐事件
+  // 监听后端发来的显隐事件以及窗口失焦（也就是点击了桌面或其他地方）
   useEffect(() => {
+    let isCurrentlyClosing = false;
+
+    const triggerHide = () => {
+      if (isCurrentlyClosing) return;
+      isCurrentlyClosing = true;
+      setIsClosing(true);
+      
+      // 离场动画播放完后，通知后端真正隐藏窗口
+      setTimeout(() => {
+        setIsClosing(false);
+        isCurrentlyClosing = false;
+        invoke("do_hide_sidebar");
+      }, 250);
+    };
+
     const unlistenShow = listen("show-sidebar", () => {
       setIsClosing(false);
+      isCurrentlyClosing = false;
       setIsOpening(true);
       // 等待进场动画结束后移除状态
       setTimeout(() => setIsOpening(false), 300);
     });
 
     const unlistenHide = listen("hide-sidebar", () => {
-      setIsClosing(true);
-      // 离场动画播放完后，通知后端真正隐藏窗口
-      setTimeout(() => {
-        setIsClosing(false);
-        invoke("do_hide_sidebar");
-      }, 250); 
+      triggerHide();
+    });
+
+    // 窗口失去系统焦点时自动隐藏（即“点击了侧边栏外”）
+    // Tauri v2 的原生窗口 blur 事件比 Web 的 blur 更可靠
+    const unlistenBlur = listen("tauri://blur", () => {
+      triggerHide();
     });
 
     return () => {
       unlistenShow.then(f => f());
       unlistenHide.then(f => f());
+      unlistenBlur.then(f => f());
     };
   }, []);
 

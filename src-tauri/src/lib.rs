@@ -70,6 +70,14 @@ fn resize_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>, widt
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            // 在底层直接监听系统窗口级别的失焦事件
+            if let tauri::WindowEvent::Focused(focused) = event {
+                if !focused {
+                    let _ = window.emit("hide-sidebar", ());
+                }
+            }
+        })
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
