@@ -37,7 +37,7 @@ use windows::{
     Win32::{
         Foundation::HWND,
         UI::WindowsAndMessaging::{
-            FindWindowExW, FindWindowW, IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOW, SW_SHOWNA,
+            FindWindowExW, FindWindowW, ShowWindow, SW_HIDE, SW_SHOWNA,
         },
     },
 };
