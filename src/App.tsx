@@ -135,12 +135,13 @@ function App() {
     return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${weekdays[date.getDay()]}`;
   };
 
-  // 当前视图状态：'main' | 'json'
+  // 当前视图状态：'main' | 'json' | 'todo'
   const [activeView, setActiveView] = useState("main");
 
   // 快捷工具项
   const tools = [
     { id: "json", icon: "✨", label: "JSON 格式化", desc: "粘贴文本格式化" },
+    { id: "todo", icon: "☑️", label: "待办事项", desc: "本地待办清单" },
     { id: "notepad", icon: "📝", label: "记事本", desc: "快速新建文本" },
     { id: "calc", icon: "🧮", label: "计算器", desc: "打开计算器" },
     { id: "terminal", icon: "🖥️", label: "终端", desc: "命令行面板" },
@@ -160,8 +161,8 @@ function App() {
   ];
 
   const handleToolClick = (toolId: string) => {
-    if (toolId === "json") {
-      setActiveView("json");
+    if (toolId === "json" || toolId === "todo") {
+      setActiveView(toolId);
     } else {
       let action = "";
       if (toolId === "settings") action = "settings";
@@ -188,24 +189,48 @@ function App() {
     }
   };
 
-  // JSON 格式化器状态
+  // ============================================
+  // JSON 格式化器逻辑
+  // ============================================
   const [jsonInput, setJsonInput] = useState("");
-  const [jsonOutput, setJsonOutput] = useState("");
   const [jsonError, setJsonError] = useState("");
 
   const formatJson = () => {
     if (!jsonInput.trim()) {
-      setJsonOutput("");
       setJsonError("");
       return;
     }
     try {
       const parsed = JSON.parse(jsonInput);
-      setJsonOutput(JSON.stringify(parsed, null, 2));
+      setJsonInput(JSON.stringify(parsed, null, 2));
       setJsonError("");
     } catch (e: any) {
       setJsonError("无效的 JSON 文本: " + e.message);
-      setJsonOutput("");
+    }
+  };
+
+  const escapeJson = () => {
+    if (!jsonInput) return;
+    const escaped = JSON.stringify(jsonInput).slice(1, -1);
+    setJsonInput(escaped);
+    setJsonError("");
+  };
+
+  const unescapeJson = () => {
+    if (!jsonInput) return;
+    try {
+      const parsed = JSON.parse(`"${jsonInput}"`);
+      setJsonInput(typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2));
+      setJsonError("");
+    } catch (e) {
+      const unescaped = jsonInput
+        .replace(/\\n/g, '\n')
+        .replace(/\\r/g, '\r')
+        .replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+      setJsonInput(unescaped);
+      setJsonError("");
     }
   };
 
@@ -215,23 +240,100 @@ function App() {
         <div className="back-btn" onClick={() => setActiveView("main")}>
           <span className="back-icon">←</span> 返回
         </div>
-        <h2 className="sub-view-title">JSON 格式化</h2>
+        <h2 className="sub-view-title">JSON 工具</h2>
       </div>
       <div className="sub-view-content json-formatter">
         <textarea 
-          className="json-input" 
-          placeholder="在此粘贴 JSON 文本..." 
+          className="json-input single-textarea" 
+          placeholder="在此粘贴被处理的 JSON 文本..." 
           value={jsonInput}
           onChange={(e) => setJsonInput(e.target.value)}
         />
-        <button className="format-btn" onClick={formatJson}>格式化</button>
+        <div className="json-btn-group">
+          <button className="format-btn" onClick={formatJson}>格式化</button>
+          <button className="action-btn" onClick={escapeJson}>转义</button>
+          <button className="action-btn" onClick={unescapeJson}>去转义</button>
+        </div>
         {jsonError && <div className="json-error">{jsonError}</div>}
-        <textarea 
-          className="json-output" 
-          placeholder="格式化结果..." 
-          readOnly 
-          value={jsonOutput}
-        />
+      </div>
+    </div>
+  );
+
+  // ============================================
+  // TODO 待办事项逻辑
+  // ============================================
+  type TodoItem = { id: string; text: string; completed: boolean };
+  const [todos, setTodos] = useState<TodoItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("toolbox_todos");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [todoInput, setTodoInput] = useState("");
+
+  useEffect(() => {
+    localStorage.setItem("toolbox_todos", JSON.stringify(todos));
+  }, [todos]);
+
+  const addTodo = () => {
+    if (!todoInput.trim()) return;
+    setTodos([{ id: Date.now().toString(), text: todoInput.trim(), completed: false }, ...todos]);
+    setTodoInput("");
+  };
+
+  const toggleTodo = (id: string) => {
+    setTodos(todos.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
+  };
+
+  const deleteTodo = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setTodos(todos.filter(t => t.id !== id));
+  };
+
+  const renderTodoView = () => (
+    <div className="sub-view">
+      <div className="sub-view-header">
+        <div className="back-btn" onClick={() => setActiveView("main")}>
+          <span className="back-icon">←</span> 返回
+        </div>
+        <h2 className="sub-view-title">待办事项</h2>
+      </div>
+      <div className="sub-view-content todo-container">
+        <div className="todo-input-group">
+          <input 
+            type="text" 
+            className="todo-input" 
+            placeholder="添加新待办，回车保存..." 
+            value={todoInput}
+            onChange={e => setTodoInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addTodo()}
+          />
+          <button className="todo-add-btn" onClick={addTodo}>添加</button>
+        </div>
+        <div className="todo-list">
+          {todos.length === 0 && <div className="todo-empty">暂无待办事项，快去添加吧！</div>}
+          {todos.map(todo => (
+            <div 
+              key={todo.id} 
+              className={`todo-item ${todo.completed ? 'completed' : ''}`}
+              onClick={() => toggleTodo(todo.id)}
+            >
+              <div className="todo-checkbox">
+                {todo.completed && <span className="todo-check-icon">✓</span>}
+              </div>
+              <span className="todo-text">{todo.text}</span>
+              <button 
+                className="todo-delete-btn" 
+                onClick={(e) => deleteTodo(todo.id, e)}
+                title="删除"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -327,6 +429,8 @@ function App() {
           </div>
         ) : activeView === "json" ? (
           renderJsonView()
+        ) : activeView === "todo" ? (
+          renderTodoView()
         ) : null}
       </div>
     </div>
