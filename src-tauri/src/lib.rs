@@ -151,6 +151,50 @@ fn system_action(window: tauri::WebviewWindow, action: String) -> Result<(), Str
     Ok(())
 }
 
+// 启动指定路径的程序（快捷访问功能）
+#[tauri::command]
+fn launch_program(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/c", "start", "", &path]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    cmd.spawn().map_err(|e| format!("启动程序失败: {}", e))?;
+    let _ = window.emit("hide-sidebar", ());
+    Ok(())
+}
+
+// 提取程序图标为 base64 PNG 数据（通过 PowerShell 调用 .NET 的 System.Drawing）
+#[tauri::command]
+async fn extract_program_icon(path: String) -> Result<String, String> {
+    let mut cmd = Command::new("powershell");
+    let ps_script = format!(
+        "Add-Type -AssemblyName System.Drawing; try {{ $icon = [System.Drawing.Icon]::ExtractAssociatedIcon('{}'); if ($icon) {{ $bmp = $icon.ToBitmap(); $ms = New-Object System.IO.MemoryStream; $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); [Convert]::ToBase64String($ms.ToArray()) }} }} catch {{}}",
+        path.replace('\'', "''")
+    );
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = cmd.output().map_err(|e| format!("提取图标失败: {}", e))?;
+    let base64 = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if base64.is_empty() {
+        Err("无法提取图标".to_string())
+    } else {
+        Ok(format!("data:image/png;base64,{}", base64))
+    }
+}
+
 // 供前端或底部托盘和快捷键统一调用的侧边栏切换逻辑
 fn toggle_sidebar_window(app_handle: &tauri::AppHandle) {
     if let Some(window) = app_handle.get_webview_window("main") {
@@ -201,6 +245,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
             // 在底层直接监听系统窗口级别的失焦事件
             if let tauri::WindowEvent::Focused(focused) = event {
@@ -224,7 +269,9 @@ pub fn run() {
             do_hide_sidebar,
             toggle_desktop,
             toggle_taskbar,
-            system_action
+            system_action,
+            launch_program,
+            extract_program_icon
         ])
         .setup(|app| {
             // 初始化状态管理器

@@ -14,13 +14,16 @@ function App() {
   const [isClosing, setIsClosing] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
 
+  // 文件对话框打开标记，防止对话框打开时侧边栏自动隐藏
+  const isDialogOpenRef = useRef(false);
+
   // 监听后端发来的显隐事件以及窗口失焦（也就是点击了桌面或其他地方）
   useEffect(() => {
     let isCurrentlyClosing = false;
     let hideTimeoutId: number | null = null;
 
     const triggerHide = () => {
-      if (isCurrentlyClosing) return;
+      if (isCurrentlyClosing || isDialogOpenRef.current) return;
       isCurrentlyClosing = true;
       setIsClosing(true);
 
@@ -145,7 +148,7 @@ function App() {
     { id: "notepad", icon: "📝", label: "记事本", desc: "快速新建文本" },
     { id: "calc", icon: "🧮", label: "计算器", desc: "打开计算器" },
     { id: "terminal", icon: "🖥️", label: "终端", desc: "命令行面板" },
-    { id: "files", icon: "📁", label: "文件", desc: "快速访问资源" },
+    { id: "quicklaunch", icon: "📌", label: "快捷访问", desc: "常用程序启动" },
     { id: "settings", icon: "⚙️", label: "系统设置", desc: "Windows 设置" },
   ];
 
@@ -161,7 +164,7 @@ function App() {
   ];
 
   const handleToolClick = (toolId: string) => {
-    if (toolId === "json" || toolId === "todo") {
+    if (toolId === "json" || toolId === "todo" || toolId === "quicklaunch") {
       setActiveView(toolId);
     } else {
       let action = "";
@@ -338,6 +341,118 @@ function App() {
     </div>
   );
 
+  // ============================================
+  // 快捷访问逻辑
+  // ============================================
+  type QuickLaunchItem = { id: string; name: string; path: string; icon?: string };
+
+  const [quickLaunchItems, setQuickLaunchItems] = useState<QuickLaunchItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("toolbox_quicklaunch");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("toolbox_quicklaunch", JSON.stringify(quickLaunchItems));
+  }, [quickLaunchItems]);
+
+  const addQuickLaunchItem = async () => {
+    isDialogOpenRef.current = true;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: true,
+        title: "选择要添加的程序",
+        filters: [
+          { name: "可执行程序", extensions: ["exe", "lnk", "bat", "cmd", "msc"] },
+          { name: "所有文件", extensions: ["*"] },
+        ],
+      });
+
+      if (selected) {
+        const paths = Array.isArray(selected) ? selected : [selected];
+        for (const filePath of paths) {
+          const fileName = filePath.split("\\").pop() || filePath;
+          const name = fileName.replace(/\.\w+$/, "");
+          const id = Date.now().toString() + Math.random().toString(36).slice(2);
+
+          setQuickLaunchItems(prev => [...prev, { id, name, path: filePath }]);
+
+          // 异步提取程序图标
+          invoke<string>("extract_program_icon", { path: filePath })
+            .then((icon) => {
+              setQuickLaunchItems(prev =>
+                prev.map(item => item.id === id ? { ...item, icon } : item)
+              );
+            })
+            .catch(() => {});
+        }
+      }
+    } finally {
+      isDialogOpenRef.current = false;
+    }
+  };
+
+  const removeQuickLaunchItem = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setQuickLaunchItems(prev => prev.filter(item => item.id !== id));
+  };
+
+  const launchProgram = (path: string) => {
+    invoke("launch_program", { path }).catch(console.error);
+  };
+
+  const renderQuickLaunchView = () => (
+    <div className="sub-view">
+      <div className="sub-view-header">
+        <div className="back-btn" onClick={() => setActiveView("main")}>
+          <span className="back-icon">←</span> 返回
+        </div>
+        <h2 className="sub-view-title">快捷访问</h2>
+      </div>
+      <div className="sub-view-content quicklaunch-container">
+        {quickLaunchItems.length === 0 && (
+          <div className="quicklaunch-empty">
+            还没有添加任何程序，点击下方按钮添加常用程序
+          </div>
+        )}
+        <div className="quicklaunch-grid">
+          {quickLaunchItems.map(item => (
+            <div
+              key={item.id}
+              className="quicklaunch-item"
+              onClick={() => launchProgram(item.path)}
+              title={item.path}
+            >
+              <button
+                className="quicklaunch-delete-btn"
+                onClick={(e) => removeQuickLaunchItem(item.id, e)}
+                title="移除"
+              >
+                ×
+              </button>
+              <div className="quicklaunch-icon">
+                {item.icon ? (
+                  <img src={item.icon} alt={item.name} draggable={false} />
+                ) : (
+                  <span className="quicklaunch-default-icon">📄</span>
+                )}
+              </div>
+              <span className="quicklaunch-name">{item.name}</span>
+            </div>
+          ))}
+          <div className="quicklaunch-add-card" onClick={addQuickLaunchItem}>
+            <span className="quicklaunch-add-icon">+</span>
+            <span className="quicklaunch-add-text">添加程序</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className={`sidebar-container ${isOpening ? 'slide-in' : ''} ${isClosing ? 'slide-out' : ''}`} ref={sidebarRef}>
       {/* 拖拽预览线 */}
@@ -431,6 +546,8 @@ function App() {
           renderJsonView()
         ) : activeView === "todo" ? (
           renderTodoView()
+        ) : activeView === "quicklaunch" ? (
+          renderQuickLaunchView()
         ) : null}
       </div>
     </div>

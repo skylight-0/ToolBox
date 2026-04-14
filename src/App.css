@@ -799,3 +799,168 @@ html, body, #root {
   background: rgba(255, 92, 92, 0.15);
   color: #ff5c5c;
 }
+
+/* ============================================
+   快捷访问子视图
+   ============================================ */
+.quicklaunch-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.quicklaunch-empty {
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  padding: 30px 0 10px;
+  animation: fluentFadeIn 0.3s ease;
+}
+
+.quicklaunch-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.quicklaunch-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 8px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.15s ease-out;
+  position: relative;
+  min-width: 0;
+  animation: fluentFadeIn 0.25s ease both;
+}
+
+.quicklaunch-item:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-card-hover);
+}
+
+.quicklaunch-item:active {
+  background: var(--bg-card-active);
+  transform: scale(0.96);
+}
+
+.quicklaunch-icon {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.quicklaunch-icon img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  image-rendering: auto;
+  border-radius: 4px;
+}
+
+.quicklaunch-default-icon {
+  font-size: 32px;
+  opacity: 0.7;
+}
+
+.quicklaunch-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  line-height: 1.3;
+}
+
+/* 删除按钮：悬浮时在右上角显示 */
+.quicklaunch-delete-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  background: rgba(255, 60, 60, 0.85);
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.7);
+  transition: all 0.15s ease;
+  z-index: 2;
+  padding: 0;
+}
+
+.quicklaunch-item:hover .quicklaunch-delete-btn {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.quicklaunch-delete-btn:hover {
+  background: rgba(255, 30, 30, 1);
+  transform: scale(1.1) !important;
+}
+
+/* 添加程序的虚线卡片 */
+.quicklaunch-add-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px 8px 12px;
+  background: transparent;
+  border: 2px dashed rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-height: 94px;
+}
+
+.quicklaunch-add-card:hover {
+  border-color: var(--accent-color);
+  background: rgba(96, 205, 255, 0.06);
+}
+
+.quicklaunch-add-card:active {
+  transform: scale(0.96);
+  background: rgba(96, 205, 255, 0.1);
+}
+
+.quicklaunch-add-icon {
+  font-size: 24px;
+  color: var(--text-tertiary);
+  line-height: 1;
+  transition: color 0.2s;
+  font-weight: 300;
+}
+
+.quicklaunch-add-card:hover .quicklaunch-add-icon {
+  color: var(--accent-color);
+}
+
+.quicklaunch-add-text {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  transition: color 0.2s;
+}
+
+.quicklaunch-add-card:hover .quicklaunch-add-text {
+  color: var(--accent-color);
+}
