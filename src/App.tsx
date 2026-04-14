@@ -17,23 +17,32 @@ function App() {
   // 监听后端发来的显隐事件以及窗口失焦（也就是点击了桌面或其他地方）
   useEffect(() => {
     let isCurrentlyClosing = false;
+    let hideTimeoutId: number | null = null;
 
     const triggerHide = () => {
       if (isCurrentlyClosing) return;
       isCurrentlyClosing = true;
       setIsClosing(true);
-      
+
       // 离场动画播放完后，通知后端真正隐藏窗口
-      setTimeout(() => {
+      if (hideTimeoutId !== null) window.clearTimeout(hideTimeoutId);
+      hideTimeoutId = window.setTimeout(() => {
         setIsClosing(false);
         isCurrentlyClosing = false;
+        hideTimeoutId = null;
         invoke("do_hide_sidebar");
       }, 250);
     };
 
     const unlistenShow = listen("show-sidebar", () => {
+      // 停止上一轮还没走完的离场销毁逻辑（防止打开时立刻被藏起来）
+      if (hideTimeoutId !== null) {
+        window.clearTimeout(hideTimeoutId);
+        hideTimeoutId = null;
+      }
       setIsClosing(false);
       isCurrentlyClosing = false;
+
       setIsOpening(true);
       // 等待进场动画结束后移除状态
       setTimeout(() => setIsOpening(false), 300);
@@ -44,7 +53,6 @@ function App() {
     });
 
     // 窗口失去系统焦点时自动隐藏（即“点击了侧边栏外”）
-    // Tauri v2 的原生窗口 blur 事件比 Web 的 blur 更可靠
     const unlistenBlur = listen("tauri://blur", () => {
       triggerHide();
     });
@@ -53,6 +61,7 @@ function App() {
       unlistenShow.then(f => f());
       unlistenHide.then(f => f());
       unlistenBlur.then(f => f());
+      if (hideTimeoutId !== null) window.clearTimeout(hideTimeoutId);
     };
   }, []);
 
@@ -128,13 +137,33 @@ function App() {
 
   // 快捷工具项
   const tools = [
-    { icon: "📋", label: "剪贴板", desc: "历史记录" },
-    { icon: "📝", label: "笔记", desc: "快速记录" },
-    { icon: "🔍", label: "搜索", desc: "全局搜索" },
-    { icon: "⚙️", label: "设置", desc: "系统设置" },
-    { icon: "📁", label: "文件", desc: "快速访问" },
-    { icon: "🖥️", label: "终端", desc: "命令行" },
+    { id: "desktop", icon: "👁️", label: "隐显桌面", desc: "开关桌面和任务栏" },
+    { id: "lock", icon: "🔒", label: "锁屏", desc: "锁定此计算机" },
+    { id: "settings", icon: "⚙️", label: "系统设置", desc: "Win11 控制中心" },
+    { id: "notepad", icon: "📝", label: "记事本", desc: "快速新建文本" },
+    { id: "calc", icon: "🧮", label: "计算器", desc: "打开计算器" },
+    { id: "taskmgr", icon: "📊", label: "任务管理器", desc: "监控系统资源" },
+    { id: "terminal", icon: "🖥️", label: "终端", desc: "命令行面板" },
+    { id: "files", icon: "📁", label: "文件", desc: "快速访问" },
   ];
+
+  const handleToolClick = (toolId: string) => {
+    if (toolId === "desktop") {
+      invoke("toggle_desktop").catch(console.error);
+    } else {
+      let action = "";
+      if (toolId === "lock") action = "lock_screen";
+      if (toolId === "settings") action = "settings";
+      if (toolId === "notepad") action = "notepad";
+      if (toolId === "calc") action = "calc";
+      if (toolId === "taskmgr") action = "taskmgr";
+      if (toolId === "terminal") action = "terminal";
+
+      if (action) {
+        invoke("system_action", { action }).catch(console.error);
+      }
+    }
+  };
 
   return (
     <div className={`sidebar-container ${isOpening ? 'slide-in' : ''} ${isClosing ? 'slide-out' : ''}`} ref={sidebarRef}>
@@ -174,7 +203,12 @@ function App() {
           </h2>
           <div className="tools-grid">
             {tools.map((tool, index) => (
-              <div className="tool-card" key={index}>
+              <div
+                className="tool-card"
+                key={index}
+                onClick={() => handleToolClick(tool.id)}
+                style={{ cursor: "pointer" }}
+              >
                 <div className="tool-icon">{tool.icon}</div>
                 <div className="tool-info">
                   <span className="tool-label">{tool.label}</span>

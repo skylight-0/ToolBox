@@ -1,6 +1,6 @@
-use tauri::{Manager, LogicalPosition, LogicalSize, Position, Size, State};
-use tauri_plugin_global_shortcut::ShortcutState;
 use std::sync::Mutex;
+use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, State};
+use tauri_plugin_global_shortcut::ShortcutState;
 
 struct AppState {
     sidebar_width: Mutex<u32>,
@@ -12,7 +12,7 @@ fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
         let scale_factor = monitor.scale_factor();
         let screen_size = monitor.size().to_logical::<f64>(scale_factor);
         let screen_pos = monitor.position().to_logical::<f64>(scale_factor);
-        
+
         let screen_height = screen_size.height;
         let screen_width = screen_size.width;
 
@@ -21,13 +21,117 @@ fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
         let x = screen_pos.x + (screen_width - logical_width);
         let y = screen_pos.y;
 
-        let _ = window.set_size(Size::Logical(LogicalSize::new(logical_width, screen_height)));
+        let _ = window.set_size(Size::Logical(LogicalSize::new(
+            logical_width,
+            screen_height,
+        )));
         let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
     }
 }
 
-
 use tauri::Emitter;
+
+#[cfg(target_os = "windows")]
+use windows::{
+    core::{w, PCWSTR},
+    Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{
+            FindWindowExW, FindWindowW, IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOW,
+        },
+    },
+};
+
+// 切换桌面和任务栏的隐藏/显示
+#[tauri::command]
+fn toggle_desktop() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).unwrap_or_default();
+
+        let progman = FindWindowW(w!("Progman"), PCWSTR::null()).unwrap_or_default();
+        let mut defview =
+            FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), PCWSTR::null())
+                .unwrap_or_default();
+
+        // 桌面的图标有可能被挂载在 WorkerW 上（例如用了动态壁纸）
+        if defview == HWND::default() {
+            let mut worker = FindWindowW(w!("WorkerW"), PCWSTR::null()).unwrap_or_default();
+            while worker != HWND::default() {
+                defview = FindWindowExW(Some(worker), None, w!("SHELLDLL_DefView"), PCWSTR::null())
+                    .unwrap_or_default();
+                if defview != HWND::default() {
+                    break;
+                }
+                worker = FindWindowExW(None, Some(worker), w!("WorkerW"), PCWSTR::null())
+                    .unwrap_or_default();
+            }
+        }
+
+        let systree = if defview != HWND::default() {
+            FindWindowExW(Some(defview), None, w!("SysListView32"), PCWSTR::null())
+                .unwrap_or_default()
+        } else {
+            HWND::default()
+        };
+
+        let mut is_visible = false;
+        if taskbar != HWND::default() {
+            is_visible = is_visible || IsWindowVisible(taskbar).as_bool();
+        }
+        if systree != HWND::default() {
+            is_visible = is_visible || IsWindowVisible(systree).as_bool();
+        }
+
+        let cmd = if is_visible { SW_HIDE } else { SW_SHOW };
+
+        if taskbar != HWND::default() {
+            let _ = ShowWindow(taskbar, cmd);
+        }
+        if systree != HWND::default() {
+            let _ = ShowWindow(systree, cmd);
+        }
+
+        Ok(!is_visible)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("仅支持 Windows 平台".to_string())
+    }
+}
+use std::process::Command;
+
+// 执行快捷系统调用
+#[tauri::command]
+fn system_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
+    match action.as_str() {
+        "lock_screen" => {
+            // 利用 Windows 原生的 rundll32 命令锁屏，避免额外引入 API
+            let _ = Command::new("rundll32.exe").args(["user32.dll,LockWorkStation"]).spawn();
+        }
+        "settings" => {
+            let _ = Command::new("cmd").args(["/c", "start", "ms-settings:"]).spawn();
+        }
+        "notepad" => {
+            let _ = Command::new("notepad.exe").spawn();
+        }
+        "calc" => {
+            let _ = Command::new("calc.exe").spawn();
+        }
+        "terminal" => {
+            // 打开现代的 Windows Terminal 或者回退到 cmd
+            let _ = Command::new("cmd").args(["/c", "start", "wt.exe"]).spawn();
+        }
+        "taskmgr" => {
+            let _ = Command::new("taskmgr.exe").spawn();
+        }
+        _ => {}
+    }
+    
+    // 执行了快速启动操作之后，非常自然地自动收起侧边栏
+    let _ = window.emit("hide-sidebar", ());
+    Ok(())
+}
 
 // 供前端或底部托盘和快捷键统一调用的侧边栏切换逻辑
 fn toggle_sidebar_window(app_handle: &tauri::AppHandle) {
@@ -65,18 +169,19 @@ fn resize_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>, widt
     let min_width = 280;
     let max_width = 1200;
     let clamped_width = width.clamp(min_width, max_width);
-    
+
     // 更新保存的宽度
     if let Ok(mut w) = state.sidebar_width.lock() {
         *w = clamped_width;
     }
-    
+
     position_window_right(&window, clamped_width);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
             // 在底层直接监听系统窗口级别的失焦事件
@@ -95,7 +200,13 @@ pub fn run() {
                 })
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![toggle_sidebar, resize_sidebar, do_hide_sidebar])
+        .invoke_handler(tauri::generate_handler![
+            toggle_sidebar,
+            resize_sidebar,
+            do_hide_sidebar,
+            toggle_desktop,
+            system_action
+        ])
         .setup(|app| {
             // 初始化状态管理器
             app.manage(AppState {
@@ -112,13 +223,36 @@ pub fn run() {
             }
 
             // ===== 添加系统托盘 =====
-            let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "退出 ToolBox", true, None::<&str>)?;
+            use tauri_plugin_autostart::ManagerExt;
+            
+            // 获取开机自启状态
+            let autostart_manager = app.autolaunch();
+            let is_autostart_enabled = autostart_manager.is_enabled().unwrap_or(false);
+
+            let autostart_i = tauri::menu::CheckMenuItem::with_id(
+                app, 
+                "autostart", 
+                "开机自启动", 
+                true, 
+                is_autostart_enabled, 
+                None::<&str>
+            )?;
+            
+            let settings_menu = tauri::menu::Submenu::with_id_and_items(
+                app, 
+                "settings",
+                "设置", 
+                true, 
+                &[&autostart_i]
+            )?;
+
+            let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "退出过程", true, None::<&str>)?;
             let show_i = tauri::menu::MenuItem::with_id(app, "show", "显示/隐藏", true, None::<&str>)?;
-            let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
+            let menu = tauri::menu::Menu::with_items(app, &[&show_i, &settings_menu, &quit_i])?;
 
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("ToolBox 侧边栏工具")
+                .tooltip("ToolBox 侧边栏")
                 .menu(&menu)
                 .on_menu_event(|app, event| {
                     match event.id.as_ref() {
@@ -127,6 +261,16 @@ pub fn run() {
                         }
                         "show" => {
                             toggle_sidebar_window(app);
+                        }
+                        "autostart" => {
+                            let manager = app.autolaunch();
+                            if let Ok(enabled) = manager.is_enabled() {
+                                if enabled {
+                                    let _ = manager.disable();
+                                } else {
+                                    let _ = manager.enable();
+                                }
+                            }
                         }
                         _ => {}
                     }
