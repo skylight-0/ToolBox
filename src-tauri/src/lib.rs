@@ -37,18 +37,16 @@ use windows::{
     Win32::{
         Foundation::HWND,
         UI::WindowsAndMessaging::{
-            FindWindowExW, FindWindowW, IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOW,
+            FindWindowExW, FindWindowW, IsWindowVisible, ShowWindow, SW_HIDE, SW_SHOW, SW_SHOWNA,
         },
     },
 };
 
-// 切换桌面和任务栏的隐藏/显示
+// 切换桌面图标的隐藏/显示
 #[tauri::command]
-fn toggle_desktop() -> Result<bool, String> {
+fn toggle_desktop(show: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     unsafe {
-        let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).unwrap_or_default();
-
         let progman = FindWindowW(w!("Progman"), PCWSTR::null()).unwrap_or_default();
         let mut defview =
             FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), PCWSTR::null())
@@ -75,24 +73,44 @@ fn toggle_desktop() -> Result<bool, String> {
             HWND::default()
         };
 
-        let mut is_visible = false;
-        if taskbar != HWND::default() {
-            is_visible = is_visible || IsWindowVisible(taskbar).as_bool();
-        }
         if systree != HWND::default() {
-            is_visible = is_visible || IsWindowVisible(systree).as_bool();
-        }
-
-        let cmd = if is_visible { SW_HIDE } else { SW_SHOW };
-
-        if taskbar != HWND::default() {
-            let _ = ShowWindow(taskbar, cmd);
-        }
-        if systree != HWND::default() {
+            let cmd = if show { SW_SHOWNA } else { SW_HIDE };
             let _ = ShowWindow(systree, cmd);
         }
 
-        Ok(!is_visible)
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("仅支持 Windows 平台".to_string())
+    }
+}
+
+// 切换任务栏的隐藏/显示
+#[tauri::command]
+fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).unwrap_or_default();
+        let cmd = if show { SW_SHOWNA } else { SW_HIDE };
+        if taskbar != HWND::default() {
+            let _ = ShowWindow(taskbar, cmd);
+        }
+
+        let mut secondary = FindWindowW(w!("Shell_SecondaryTrayWnd"), PCWSTR::null()).unwrap_or_default();
+        while secondary != HWND::default() {
+            let _ = ShowWindow(secondary, cmd);
+            secondary = FindWindowExW(None, Some(secondary), w!("Shell_SecondaryTrayWnd"), PCWSTR::null()).unwrap_or_default();
+        }
+
+        if show {
+            // Taskbar 显示时也是 Topmost，会挤到 Z 轴最上面。
+            // 这里我们通过取消置顶再重新置顶，强制洗牌让我们的窗口回到 Topmost 的最顶端。
+            let _ = window.set_always_on_top(false);
+            let _ = window.set_always_on_top(true);
+        }
+        
+        Ok(())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -205,6 +223,7 @@ pub fn run() {
             resize_sidebar,
             do_hide_sidebar,
             toggle_desktop,
+            toggle_taskbar,
             system_action
         ])
         .setup(|app| {
