@@ -803,6 +803,183 @@ html, body, #root {
 /* ============================================
    快捷访问子视图
    ============================================ */
+/* 侧边布局包裹器 */
+.sub-view.quicklaunch-split-view {
+  flex-direction: row;
+  padding: 0;
+  gap: 0;
+}
+
+/* 左侧垂直侧栏 */
+.sub-view-sidebar {
+  width: 140px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.05);
+  box-shadow: inset -2px 0 10px rgba(0, 0, 0, 0.05);
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.05s both;
+}
+
+.sub-view-sidebar-header {
+  padding: 24px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sub-view-sidebar-header .back-btn {
+  margin-left: -6px;
+}
+
+.quicklaunch-nav {
+  padding: 16px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.quicklaunch-nav::-webkit-scrollbar {
+  width: 4px;
+}
+.quicklaunch-nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+/* 内建分组项 */
+.quicklaunch-nav-item {
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.15s;
+  color: var(--text-secondary);
+  font-size: 13px;
+  user-select: none;
+  min-height: 36px;
+}
+
+.quicklaunch-nav-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.quicklaunch-nav-item.active {
+  background: var(--accent-color);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
+
+.quicklaunch-nav-item.active:hover {
+  background: var(--accent-color);
+}
+
+.nav-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-delete {
+  font-size: 14px;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: all 0.2s;
+  color: rgba(255,255,255,0.7);
+}
+
+.quicklaunch-nav-item:hover .nav-delete {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.nav-delete:hover {
+  color: #ff5c5c;
+  transform: scale(1.1) !important;
+}
+
+.quicklaunch-nav-item.add-btn {
+  margin-top: 8px;
+  justify-content: center;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  color: var(--text-tertiary);
+  gap: 6px;
+}
+
+.quicklaunch-nav-item.add-btn:hover {
+  border-color: rgba(255, 255, 255, 0.4);
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.quicklaunch-nav-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--accent-color);
+  border-radius: var(--radius-sm);
+  color: #fff;
+  font-size: 13px;
+  padding: 4px 6px;
+  outline: none;
+}
+
+/* ============================================
+   主内容区域
+   ============================================ */
+.sub-view-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0 24px;
+  overflow: hidden;
+}
+
+.sub-view-main-header {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.1s both;
+}
+
+.active-group-title {
+  margin: 0;
+}
+
+.add-program-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.add-program-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.add-program-btn:active {
+  transform: scale(0.96);
+}
+
+.quicklaunch-split-view .sub-view-content {
+  padding: 24px 0;
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.15s both;
+}
+
 .quicklaunch-container {
   display: flex;
   flex-direction: column;
@@ -815,12 +992,11 @@ html, body, #root {
   color: var(--text-tertiary);
   font-size: 13px;
   padding: 30px 0 10px;
-  animation: fluentFadeIn 0.3s ease;
 }
 
 .quicklaunch-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
   gap: 8px;
 }
 

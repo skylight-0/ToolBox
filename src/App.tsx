@@ -344,7 +344,19 @@ function App() {
   // ============================================
   // 快捷访问逻辑
   // ============================================
-  type QuickLaunchItem = { id: string; name: string; path: string; icon?: string };
+  type QuickLaunchGroup = { id: string; name: string };
+  type QuickLaunchItem = { id: string; name: string; path: string; icon?: string; groupId?: string };
+
+  const [quickLaunchGroups, setQuickLaunchGroups] = useState<QuickLaunchGroup[]>(() => {
+    try {
+      const saved = localStorage.getItem("toolbox_quicklaunch_groups");
+      return saved ? JSON.parse(saved) : [{ id: "default", name: "默认分组" }];
+    } catch {
+      return [{ id: "default", name: "默认分组" }];
+    }
+  });
+
+  const [activeGroupId, setActiveGroupId] = useState("default");
 
   const [quickLaunchItems, setQuickLaunchItems] = useState<QuickLaunchItem[]>(() => {
     try {
@@ -356,8 +368,42 @@ function App() {
   });
 
   useEffect(() => {
+    localStorage.setItem("toolbox_quicklaunch_groups", JSON.stringify(quickLaunchGroups));
+  }, [quickLaunchGroups]);
+
+  useEffect(() => {
     localStorage.setItem("toolbox_quicklaunch", JSON.stringify(quickLaunchItems));
   }, [quickLaunchItems]);
+
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupName, setEditingGroupName] = useState("");
+  const [isAddingGroup, setIsAddingGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+
+  const saveEditGroup = (id: string) => {
+    if (editingGroupName.trim()) {
+      setQuickLaunchGroups(prev => prev.map(g => g.id === id ? { ...g, name: editingGroupName.trim() } : g));
+    }
+    setEditingGroupId(null);
+  };
+
+  const saveNewGroup = () => {
+    if (newGroupName.trim()) {
+      const id = Date.now().toString();
+      setQuickLaunchGroups(prev => [...prev, { id, name: newGroupName.trim() }]);
+      setActiveGroupId(id);
+    }
+    setIsAddingGroup(false);
+    setNewGroupName("");
+  };
+
+  const deleteGroup = (groupId: string) => {
+    setQuickLaunchItems(prev => prev.map(item => item.groupId === groupId ? { ...item, groupId: "default" } : item));
+    setQuickLaunchGroups(prev => prev.filter(g => g.id !== groupId));
+    if (activeGroupId === groupId) {
+      setActiveGroupId("default");
+    }
+  };
 
   const addQuickLaunchItem = async () => {
     isDialogOpenRef.current = true;
@@ -379,7 +425,7 @@ function App() {
           const name = fileName.replace(/\.\w+$/, "");
           const id = Date.now().toString() + Math.random().toString(36).slice(2);
 
-          setQuickLaunchItems(prev => [...prev, { id, name, path: filePath }]);
+          setQuickLaunchItems(prev => [...prev, { id, name, path: filePath, groupId: activeGroupId }]);
 
           // 异步提取程序图标
           invoke<string>("extract_program_icon", { path: filePath })
@@ -405,53 +451,115 @@ function App() {
     invoke("launch_program", { path }).catch(console.error);
   };
 
-  const renderQuickLaunchView = () => (
-    <div className="sub-view">
-      <div className="sub-view-header">
-        <div className="back-btn" onClick={() => setActiveView("main")}>
-          <span className="back-icon">←</span> 返回
-        </div>
-        <h2 className="sub-view-title">快捷访问</h2>
-      </div>
-      <div className="sub-view-content quicklaunch-container">
-        {quickLaunchItems.length === 0 && (
-          <div className="quicklaunch-empty">
-            还没有添加任何程序，点击下方按钮添加常用程序
+  const renderQuickLaunchView = () => {
+    const currentItems = quickLaunchItems.filter(item => (item.groupId || "default") === activeGroupId);
+    const activeGroupName = quickLaunchGroups.find(g => g.id === activeGroupId)?.name || "快捷访问";
+
+    return (
+      <div className="sub-view quicklaunch-split-view">
+        {/* 左侧垂直侧栏 */}
+        <div className="sub-view-sidebar">
+          <div className="sub-view-sidebar-header">
+            <div className="back-btn" onClick={() => setActiveView("main")}>
+              <span className="back-icon">←</span> 返回
+            </div>
+            <h2 className="sub-view-title">分类分组</h2>
           </div>
-        )}
-        <div className="quicklaunch-grid">
-          {quickLaunchItems.map(item => (
-            <div
-              key={item.id}
-              className="quicklaunch-item"
-              onClick={() => launchProgram(item.path)}
-              title={item.path}
-            >
-              <button
-                className="quicklaunch-delete-btn"
-                onClick={(e) => removeQuickLaunchItem(item.id, e)}
-                title="移除"
+          <div className="quicklaunch-nav">
+            {quickLaunchGroups.map(group => (
+              <div 
+                key={group.id} 
+                className={`quicklaunch-nav-item ${activeGroupId === group.id ? 'active' : ''}`}
+                onClick={() => setActiveGroupId(group.id)}
+                onDoubleClick={() => {
+                  if (group.id !== "default") {
+                    setEditingGroupId(group.id);
+                    setEditingGroupName(group.name);
+                  }
+                }}
               >
-                ×
-              </button>
-              <div className="quicklaunch-icon">
-                {item.icon ? (
-                  <img src={item.icon} alt={item.name} draggable={false} />
+                {editingGroupId === group.id ? (
+                  <input
+                    autoFocus
+                    className="quicklaunch-nav-input"
+                    value={editingGroupName}
+                    onChange={e => setEditingGroupName(e.target.value)}
+                    onBlur={() => saveEditGroup(group.id)}
+                    onKeyDown={e => e.key === 'Enter' && saveEditGroup(group.id)}
+                  />
                 ) : (
-                  <span className="quicklaunch-default-icon">📄</span>
+                  <>
+                    <span className="nav-text" title={group.name}>{group.name}</span>
+                    {group.id !== "default" && (
+                      <span className="nav-delete" title="删除分组" onClick={(e) => { e.stopPropagation(); deleteGroup(group.id); }}>×</span>
+                    )}
+                  </>
                 )}
               </div>
-              <span className="quicklaunch-name">{item.name}</span>
-            </div>
-          ))}
-          <div className="quicklaunch-add-card" onClick={addQuickLaunchItem}>
-            <span className="quicklaunch-add-icon">+</span>
-            <span className="quicklaunch-add-text">添加程序</span>
+            ))}
+            {isAddingGroup ? (
+              <input
+                className="quicklaunch-nav-input add-input"
+                autoFocus
+                placeholder="命名(回车)"
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+                onBlur={saveNewGroup}
+                onKeyDown={e => e.key === 'Enter' && saveNewGroup()}
+              />
+            ) : (
+              <div className="quicklaunch-nav-item add-btn" title="新建分组" onClick={() => setIsAddingGroup(true)}>
+                + 新建
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 右侧主内容 */}
+        <div className="sub-view-main">
+          <div className="sub-view-main-header">
+            <h2 className="sub-view-title active-group-title">{activeGroupName}</h2>
+            <button className="add-program-btn" onClick={addQuickLaunchItem}>+ 添加程序</button>
+          </div>
+          <div className="sub-view-content quicklaunch-container">
+            {currentItems.length === 0 ? (
+              <div className="quicklaunch-empty">
+                此分组还没有添加程序
+              </div>
+            ) : (
+              <div className="quicklaunch-grid">
+                {currentItems.map(item => (
+                  <div
+                    key={item.id}
+                    className="quicklaunch-item"
+                    onClick={() => launchProgram(item.path)}
+                    title={item.path}
+                  >
+                    <button
+                      className="quicklaunch-delete-btn"
+                      onClick={(e) => removeQuickLaunchItem(item.id, e)}
+                      title="移除"
+                    >
+                      ×
+                    </button>
+                    <div className="quicklaunch-icon">
+                      {item.icon ? (
+                        <img src={item.icon} alt={item.name} draggable={false} />
+                      ) : (
+                        <span className="quicklaunch-default-icon">📄</span>
+                      )}
+                    </div>
+                    <span className="quicklaunch-name">{item.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
+
 
   return (
     <div className={`sidebar-container ${isOpening ? 'slide-in' : ''} ${isClosing ? 'slide-out' : ''}`} ref={sidebarRef}>
