@@ -643,8 +643,13 @@ function App() {
                     key={index}
                     onClick={() => handleSwitchClick(sw.id)}
                   >
-                    <div className="switch-icon">{sw.icon}</div>
-                    <div className="switch-label">{sw.label}</div>
+                    <div className="content-left">
+                      <div className="switch-icon">{sw.icon}</div>
+                      <div className="switch-label">{sw.label}</div>
+                    </div>
+                    <div className="switch-toggle-track">
+                      <div className="switch-toggle-thumb" />
+                    </div>
                   </div>
                 ))}
               </div>

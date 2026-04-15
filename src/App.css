@@ -9,50 +9,55 @@
 }
 
 :root {
-  /* Windows 11 Mica/Acrylic 深色模式材质 */
-  --bg-primary: rgba(32, 32, 32, 0.85);
-  --bg-card: rgba(255, 255, 255, 0.05); /* 默认卡片背景 */
-  --bg-card-hover: rgba(255, 255, 255, 0.09);
-  --bg-card-active: rgba(255, 255, 255, 0.03);
+  /* 高级磨砂玻璃（Glassmorphism）色彩系统 */
+  --bg-primary: rgba(25, 25, 25, 0.65);
+  /* 更透明的背景 */
+  --bg-glass-high: rgba(255, 255, 255, 0.08);
+  --bg-glass-low: rgba(255, 255, 255, 0.03);
 
-  /* Windows 11 标准文本颜色 */
+  --bg-card: rgba(255, 255, 255, 0.06);
+  --bg-card-hover: rgba(255, 255, 255, 0.12);
+  --bg-card-active: rgba(255, 255, 255, 0.04);
+
+  /* 文字颜色 */
   --text-primary: #ffffff;
-  --text-secondary: rgba(255, 255, 255, 0.78);
-  --text-tertiary: rgba(255, 255, 255, 0.5);
+  --text-secondary: rgba(255, 255, 255, 0.8);
+  --text-tertiary: rgba(255, 255, 255, 0.45);
 
-  /* 强调色：Windows 系统蓝 */
+  /* 强调色：更透亮的蓝 */
   --accent-color: #60CDFF;
-  --accent-color-hover: #53B6E5;
+  --accent-color-hover: #76D5FF;
   --accent-color-active: #479DC6;
-  --accent-glow: rgba(96, 205, 255, 0.4);
+  --accent-glow: rgba(96, 205, 255, 0.5);
 
-  /* 边框：Fluent Design 中的光泽边框 */
-  --border-subtle: rgba(255, 255, 255, 0.1);
-  --border-card: rgba(255, 255, 255, 0.06);
-  --border-card-hover: rgba(255, 255, 255, 0.12);
+  /* 磨砂边框 */
+  --border-glass: 1px solid rgba(255, 255, 255, 0.12);
+  --border-subtle: rgba(255, 255, 255, 0.08);
 
-  /* 阴影：柔和层级 */
-  --shadow-window: 0 8px 32px rgba(0, 0, 0, 0.4);
-  --shadow-card: 0 2px 4px rgba(0, 0, 0, 0.15);
+  /* 阴影 */
+  --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+  --shadow-inner: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 
-  /* 圆角：Win11 标准数值 */
-  --radius-sm: 4px;
-  --radius-md: 8px; /* 大部分卡片和按钮 */
-  --radius-lg: 12px;
+  /* 圆角 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
 
-  /* 字体：优先使用 Win11 默认的 Segoe UI Variable */
   font-family: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, sans-serif;
   font-size: 14px;
   line-height: 20px;
   color: var(--text-primary);
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
   width: 100%;
   overflow: hidden;
   background: transparent;
-  user-select: none; /* 整体防选中，提升原生感 */
+  user-select: none;
+  /* 整体防选中，提升原生感 */
 }
 
 /* ============================================
@@ -63,26 +68,49 @@ html, body, #root {
   width: 100%;
   height: 100%;
   background: var(--bg-primary);
-  /* Win11 的 Acrylic 模糊材质 */
-  backdrop-filter: blur(30px) saturate(125%);
-  -webkit-backdrop-filter: blur(30px) saturate(125%);
-  border-left: 1px solid var(--border-subtle);
-  box-shadow: var(--shadow-window);
+  /* 极致磨砂效果 */
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border-left: var(--border-glass);
+  box-shadow: var(--shadow-glass);
   position: relative;
   overflow: hidden;
-  /* 确保默认状态不偏移 */
   transform: translateX(0);
+}
+
+/* 噪点纹理层，提升玻璃真实感 */
+.sidebar-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.05;
+  pointer-events: none;
+  z-index: 0;
 }
 
 /* 进场和退场动画 */
 @keyframes slideInFromRight {
-  0% { transform: translateX(100%); }
-  100% { transform: translateX(0); }
+  0% {
+    transform: translateX(100%);
+  }
+
+  100% {
+    transform: translateX(0);
+  }
 }
 
 @keyframes slideOutToRight {
-  0% { transform: translateX(0); }
-  100% { transform: translateX(100%); }
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 .sidebar-container.slide-in {
@@ -102,7 +130,7 @@ html, body, #root {
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,255,255,0.15), rgba(255,255,255,0.05));
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.05));
   z-index: 10;
   pointer-events: none;
 }
@@ -213,30 +241,38 @@ html, body, #root {
 
 .switches-area {
   flex: 2;
-  min-height: 160px;
-  max-height: 30%;
-  padding: 16px 24px;
-  background: rgba(0, 0, 0, 0.15);
-  border-top: 1px solid var(--border-subtle);
+  min-height: 150px;
+  max-height: 25%;
+  padding: 20px 24px;
+  background: rgba(0, 0, 0, 0.2);
+  border-top: var(--border-glass);
   display: flex;
   flex-direction: column;
-  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.1);
+  box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.15);
+  position: relative;
+  overflow: hidden;
 }
 
-/* 自定义滚动条 - Win11 风格通常更细 */
-.functional-area::-webkit-scrollbar {
+/* 自定义滚动条 - 极简主义 */
+.functional-area::-webkit-scrollbar,
+.sub-view-content::-webkit-scrollbar {
   width: 4px;
 }
-.functional-area::-webkit-scrollbar-track {
-  margin: 4px 0;
+
+.functional-area::-webkit-scrollbar-track,
+.sub-view-content::-webkit-scrollbar-track {
   background: transparent;
 }
-.functional-area::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
+
+.functional-area::-webkit-scrollbar-thumb,
+.sub-view-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
 }
-.functional-area::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.4);
+
+.functional-area::-webkit-scrollbar-thumb:hover,
+.sub-view-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 
 /* ============================================
@@ -301,26 +337,44 @@ html, body, #root {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-card);
+  padding: 14px 16px;
+  background: var(--bg-glass-low);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.1s ease-out;
+  transition: all 0.25s cubic-bezier(0.1, 0.9, 0.2, 1);
   position: relative;
   overflow: hidden;
+  box-shadow: var(--shadow-inner);
 }
 
-/* Win11 Button Hover */
 .tool-card:hover {
-  background: var(--bg-card-hover);
-  border-color: var(--border-card-hover);
+  background: var(--bg-glass-high);
+  border-color: rgba(255, 255, 255, 0.15);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
 }
 
-/* Win11 Button Click */
+.tool-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(120deg,
+      transparent,
+      rgba(255, 255, 255, 0.05),
+      transparent);
+  transition: 0.5s;
+}
+
+.tool-card:hover::before {
+  left: 100%;
+}
+
 .tool-card:active {
-  background: var(--bg-card-active);
-  transform: scale(0.98); /* 微微缩放体现点击反馈 */
+  transform: scale(0.96) translateY(0);
 }
 
 .tool-icon {
@@ -357,55 +411,95 @@ html, body, #root {
    开关区 (暗/亮状态切换)
    ============================================ */
 .switch-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
 }
 
 .switch-card {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.03); /* 暗色 */
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--bg-glass-low);
   border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s ease;
-  color: var(--text-tertiary); /* 文字偏暗 */
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  box-shadow: var(--shadow-inner);
 }
 
 .switch-card:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-glass-high);
+  border-color: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
 }
 
-.switch-card.active {
-  background: var(--accent-color);
-  background: linear-gradient(135deg, var(--accent-color) 0%, var(--accent-color-active) 100%);
-  border-color: transparent;
-  color: #fff; /* 文字变亮 */
-  box-shadow: 0 4px 12px var(--accent-glow);
-}
-
-.switch-card.active:hover {
-  background: linear-gradient(135deg, var(--accent-color-hover) 0%, var(--accent-color) 100%);
-}
-
-.switch-card:active {
-  transform: scale(0.96);
+.switch-card .content-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .switch-icon {
-  font-size: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  font-size: 18px;
+  opacity: 0.8;
+  transition: transform 0.3s ease;
+}
+
+.switch-card:hover .switch-icon {
+  transform: scale(1.1);
 }
 
 .switch-label {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: color 0.3s;
+}
+
+/* 模拟真正的 iOS/Win11 开关滑块 */
+.switch-toggle-track {
+  width: 44px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 11px;
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.switch-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  background: #ccc;
+  border-radius: 50%;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.switch-card.active .switch-label {
+  color: var(--text-primary);
+}
+
+.switch-card.active .switch-toggle-track {
+  background: var(--accent-color);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.switch-card.active .switch-toggle-thumb {
+  left: 24px;
+  background: #fff;
+  transform: scale(1.1);
+}
+
+.switch-card:active {
+  transform: scale(0.98);
 }
 
 /* ============================================
@@ -445,11 +539,12 @@ html, body, #root {
   font-family: inherit;
   font-weight: 600;
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.1);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-bottom-width: 2px;
-  border-radius: var(--radius-sm);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
   padding: 2px 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 /* ============================================
@@ -515,13 +610,16 @@ html, body, #root {
 .sub-view-content::-webkit-scrollbar {
   width: 4px;
 }
+
 .sub-view-content::-webkit-scrollbar-track {
   background: transparent;
 }
+
 .sub-view-content::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 4px;
 }
+
 .sub-view-content::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.4);
 }
@@ -544,7 +642,8 @@ html, body, #root {
 }
 
 .json-input.single-textarea {
-  min-height: 300px; /* 单一输入框时让它尽可能大 */
+  min-height: 300px;
+  /* 单一输入框时让它尽可能大 */
 }
 
 .json-input:focus {
@@ -560,7 +659,8 @@ html, body, #root {
 }
 
 .format-btn {
-  flex: 2; /* 格式化为主按钮，稍微宽一些 */
+  flex: 2;
+  /* 格式化为主按钮，稍微宽一些 */
   background: var(--accent-color);
   color: #fff;
   border: none;
@@ -628,23 +728,52 @@ html, body, #root {
     opacity: 0;
     transform: translateY(8px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
   }
 }
 
-.sidebar-header { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.05s both; }
-.tools-section { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.1s both; }
-.shortcuts-section { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.15s both; }
-.switches-area { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.2s both; }
+.sidebar-header {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.05s both;
+}
 
-.tool-card:nth-child(1) { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.10s both; }
-.tool-card:nth-child(2) { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.12s both; }
-.tool-card:nth-child(3) { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.14s both; }
-.tool-card:nth-child(4) { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.16s both; }
-.tool-card:nth-child(5) { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.18s both; }
-.tool-card:nth-child(6) { animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.20s both; }
+.tools-section {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.1s both;
+}
+
+.shortcuts-section {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.15s both;
+}
+
+.switches-area {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.2s both;
+}
+
+.tool-card:nth-child(1) {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.10s both;
+}
+
+.tool-card:nth-child(2) {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.12s both;
+}
+
+.tool-card:nth-child(3) {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.14s both;
+}
+
+.tool-card:nth-child(4) {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.16s both;
+}
+
+.tool-card:nth-child(5) {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.18s both;
+}
+
+.tool-card:nth-child(6) {
+  animation: fluentFadeIn 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) 0.20s both;
+}
 
 /* ============================================
    待办事项子视图 (TODO List)
@@ -846,6 +975,7 @@ html, body, #root {
 .quicklaunch-nav::-webkit-scrollbar {
   width: 4px;
 }
+
 .quicklaunch-nav::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 4px;
@@ -893,7 +1023,7 @@ html, body, #root {
   opacity: 0;
   transform: scale(0.8);
   transition: all 0.2s;
-  color: rgba(255,255,255,0.7);
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .quicklaunch-nav-item:hover .nav-delete {
