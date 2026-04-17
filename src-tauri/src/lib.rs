@@ -36,9 +36,7 @@ use windows::{
     core::{w, PCWSTR},
     Win32::{
         Foundation::HWND,
-        UI::WindowsAndMessaging::{
-            FindWindowExW, FindWindowW, ShowWindow, SW_HIDE, SW_SHOWNA,
-        },
+        UI::WindowsAndMessaging::{FindWindowExW, FindWindowW, ShowWindow, SW_HIDE, SW_SHOWNA},
     },
 };
 
@@ -97,10 +95,17 @@ fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String
             let _ = ShowWindow(taskbar, cmd);
         }
 
-        let mut secondary = FindWindowW(w!("Shell_SecondaryTrayWnd"), PCWSTR::null()).unwrap_or_default();
+        let mut secondary =
+            FindWindowW(w!("Shell_SecondaryTrayWnd"), PCWSTR::null()).unwrap_or_default();
         while secondary != HWND::default() {
             let _ = ShowWindow(secondary, cmd);
-            secondary = FindWindowExW(None, Some(secondary), w!("Shell_SecondaryTrayWnd"), PCWSTR::null()).unwrap_or_default();
+            secondary = FindWindowExW(
+                None,
+                Some(secondary),
+                w!("Shell_SecondaryTrayWnd"),
+                PCWSTR::null(),
+            )
+            .unwrap_or_default();
         }
 
         if show {
@@ -109,7 +114,7 @@ fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String
             let _ = window.set_always_on_top(false);
             let _ = window.set_always_on_top(true);
         }
-        
+
         Ok(())
     }
     #[cfg(not(target_os = "windows"))]
@@ -125,10 +130,14 @@ fn system_action(window: tauri::WebviewWindow, action: String) -> Result<(), Str
     match action.as_str() {
         "lock_screen" => {
             // 利用 Windows 原生的 rundll32 命令锁屏，避免额外引入 API
-            let _ = Command::new("rundll32.exe").args(["user32.dll,LockWorkStation"]).spawn();
+            let _ = Command::new("rundll32.exe")
+                .args(["user32.dll,LockWorkStation"])
+                .spawn();
         }
         "settings" => {
-            let _ = Command::new("cmd").args(["/c", "start", "ms-settings:"]).spawn();
+            let _ = Command::new("cmd")
+                .args(["/c", "start", "ms-settings:"])
+                .spawn();
         }
         "notepad" => {
             let _ = Command::new("notepad.exe").spawn();
@@ -145,7 +154,7 @@ fn system_action(window: tauri::WebviewWindow, action: String) -> Result<(), Str
         }
         _ => {}
     }
-    
+
     // 执行了快速启动操作之后，非常自然地自动收起侧边栏
     let _ = window.emit("hide-sidebar", ());
     Ok(())
@@ -243,6 +252,7 @@ fn resize_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>, widt
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -290,63 +300,64 @@ pub fn run() {
 
             // ===== 添加系统托盘 =====
             use tauri_plugin_autostart::ManagerExt;
-            
+
             // 获取开机自启状态
             let autostart_manager = app.autolaunch();
             let is_autostart_enabled = autostart_manager.is_enabled().unwrap_or(false);
 
             let autostart_i = tauri::menu::CheckMenuItem::with_id(
-                app, 
-                "autostart", 
-                "开机自启动", 
-                true, 
-                is_autostart_enabled, 
-                None::<&str>
-            )?;
-            
-            let settings_menu = tauri::menu::Submenu::with_id_and_items(
-                app, 
-                "settings",
-                "设置", 
-                true, 
-                &[&autostart_i]
+                app,
+                "autostart",
+                "开机自启动",
+                true,
+                is_autostart_enabled,
+                None::<&str>,
             )?;
 
-            let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "退出过程", true, None::<&str>)?;
-            let show_i = tauri::menu::MenuItem::with_id(app, "show", "显示/隐藏", true, None::<&str>)?;
+            let settings_menu = tauri::menu::Submenu::with_id_and_items(
+                app,
+                "settings",
+                "设置",
+                true,
+                &[&autostart_i],
+            )?;
+
+            let quit_i =
+                tauri::menu::MenuItem::with_id(app, "quit", "退出过程", true, None::<&str>)?;
+            let show_i =
+                tauri::menu::MenuItem::with_id(app, "show", "显示/隐藏", true, None::<&str>)?;
             let menu = tauri::menu::Menu::with_items(app, &[&show_i, &settings_menu, &quit_i])?;
 
             let _tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("ToolBox 侧边栏")
                 .menu(&menu)
-                .on_menu_event(|app, event| {
-                    match event.id.as_ref() {
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        "show" => {
-                            toggle_sidebar_window(app);
-                        }
-                        "autostart" => {
-                            let manager = app.autolaunch();
-                            if let Ok(enabled) = manager.is_enabled() {
-                                if enabled {
-                                    let _ = manager.disable();
-                                } else {
-                                    let _ = manager.enable();
-                                }
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    "show" => {
+                        toggle_sidebar_window(app);
+                    }
+                    "autostart" => {
+                        let manager = app.autolaunch();
+                        if let Ok(enabled) = manager.is_enabled() {
+                            if enabled {
+                                let _ = manager.disable();
+                            } else {
+                                let _ = manager.enable();
                             }
                         }
-                        _ => {}
                     }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let tauri::tray::TrayIconEvent::Click {
                         button: tauri::tray::MouseButton::Left,
                         button_state: tauri::tray::MouseButtonState::Up,
                         ..
-                    } = event {
+                    } = event
+                    {
                         toggle_sidebar_window(tray.app_handle());
                     }
                 })

@@ -1270,3 +1270,113 @@ body,
 .quicklaunch-add-card:hover .quicklaunch-add-text {
   color: var(--accent-color);
 }
+
+/* ============================================
+   番茄钟视图
+   ============================================ */
+.pomodoro-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  height: 100%;
+}
+
+.pomodoro-modes {
+  display: flex;
+  gap: 16px;
+  background: var(--bg-card);
+  padding: 6px;
+  border-radius: 20px;
+  border: 1px solid var(--border-card);
+}
+
+.pomodoro-mode-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  border-radius: 14px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.pomodoro-mode-btn.active {
+  background: var(--accent-color);
+  color: #fff;
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
+
+.pomodoro-timer-circle {
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--accent-color) 100%, transparent 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.pomodoro-timer-circle::before {
+  content: "";
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  background: var(--bg-primary);
+  border-radius: 50%;
+  box-shadow: inset 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.pomodoro-time-display {
+  font-family: 'Segoe UI Variable Display', 'Segoe UI', monospace;
+  font-size: 56px;
+  font-weight: 600;
+  color: var(--text-primary);
+  position: relative;
+  z-index: 1;
+}
+
+.pomodoro-controls {
+  display: flex;
+  gap: 16px;
+}
+
+.pomodoro-control-btn {
+  padding: 12px 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pomodoro-control-btn.main-btn {
+  background: var(--accent-color);
+  color: #fff;
+  box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+.pomodoro-control-btn.main-btn:hover {
+  background: var(--accent-color-hover);
+  transform: translateY(-2px);
+}
+
+.pomodoro-control-btn.main-btn:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.pomodoro-control-btn.reset-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+}
+
+.pomodoro-control-btn.reset-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}

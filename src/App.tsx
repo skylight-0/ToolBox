@@ -149,6 +149,7 @@ function App() {
     { id: "calc", icon: "🧮", label: "计算器", desc: "打开计算器" },
     { id: "terminal", icon: "🖥️", label: "终端", desc: "命令行面板" },
     { id: "quicklaunch", icon: "📌", label: "快捷访问", desc: "常用程序启动" },
+    { id: "pomodoro", icon: "🍅", label: "番茄钟", desc: "专注与休息计时" },
     { id: "settings", icon: "⚙️", label: "系统设置", desc: "Windows 设置" },
   ];
 
@@ -164,7 +165,7 @@ function App() {
   ];
 
   const handleToolClick = (toolId: string) => {
-    if (toolId === "json" || toolId === "todo" || toolId === "quicklaunch") {
+    if (toolId === "json" || toolId === "todo" || toolId === "quicklaunch" || toolId === "pomodoro") {
       setActiveView(toolId);
     } else {
       let action = "";
@@ -560,6 +561,116 @@ function App() {
     );
   };
 
+  // ============================================
+  // 番茄钟逻辑
+  // ============================================
+  const [timeLeft, setTimeLeft] = useState(25 * 60);
+  const [isTimerActive, setIsTimerActive] = useState(false);
+  const [isBreak, setIsBreak] = useState(false);
+  
+  useEffect(() => {
+    let interval: number | null = null;
+    if (isTimerActive && timeLeft > 0) {
+      interval = window.setInterval(() => {
+        setTimeLeft(prev => prev - 1);
+      }, 1000);
+    } else if (isTimerActive && timeLeft === 0) {
+      setIsTimerActive(false);
+      
+      // 使用 Tauri 插件发送系统通知
+      import('@tauri-apps/plugin-notification').then(({ isPermissionGranted, requestPermission, sendNotification }) => {
+        isPermissionGranted().then(granted => {
+          if (!granted) {
+            return requestPermission();
+          }
+          return granted ? 'granted' : 'default';
+        }).then(permission => {
+          if (permission === 'granted') {
+            sendNotification({
+              title: isBreak ? "休息结束！" : "专注完成！",
+              body: isBreak ? "休息已结束，准备开始新的专注！" : "完成了一个番茄钟，休息一下吧！",
+            });
+          }
+        });
+      }).catch(console.error);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    }
+  }, [isTimerActive, timeLeft, isBreak]);
+
+  const toggleTimer = () => {
+    // 请求通知权限
+    if (!isTimerActive) {
+      import('@tauri-apps/plugin-notification').then(({ isPermissionGranted, requestPermission }) => {
+        isPermissionGranted().then(granted => {
+          if (!granted) {
+            requestPermission();
+          }
+        });
+      }).catch(console.error);
+    }
+    setIsTimerActive(!isTimerActive);
+  };
+  
+  const resetTimer = () => {
+    setIsTimerActive(false);
+    setTimeLeft(isBreak ? 5 * 60 : 25 * 60);
+  };
+  
+  const setMode = (breakMode: boolean) => {
+    setIsBreak(breakMode);
+    setIsTimerActive(false);
+    setTimeLeft(breakMode ? 5 * 60 : 25 * 60);
+  };
+
+  const formatTimer = (seconds: number) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
+  const renderPomodoroView = () => (
+    <div className="sub-view">
+      <div className="sub-view-header">
+        <div className="back-btn" onClick={() => setActiveView("main")}>
+          <span className="back-icon">←</span> 返回
+        </div>
+        <h2 className="sub-view-title">番茄钟</h2>
+      </div>
+      <div className="sub-view-content pomodoro-container">
+        <div className="pomodoro-modes">
+          <button 
+            className={`pomodoro-mode-btn ${!isBreak ? 'active' : ''}`}
+            onClick={() => setMode(false)}
+          >
+            专注模式 (25分钟)
+          </button>
+          <button 
+            className={`pomodoro-mode-btn ${isBreak ? 'active' : ''}`}
+            onClick={() => setMode(true)}
+          >
+            休息模式 (5分钟)
+          </button>
+        </div>
+        
+        <div className="pomodoro-timer-circle">
+          <div className="pomodoro-time-display">
+            {formatTimer(timeLeft)}
+          </div>
+        </div>
+        
+        <div className="pomodoro-controls">
+          <button className="pomodoro-control-btn main-btn" onClick={toggleTimer}>
+            {isTimerActive ? "暂停计时" : "开始计时"}
+          </button>
+          <button className="pomodoro-control-btn reset-btn" onClick={resetTimer}>
+            重置
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className={`sidebar-container ${isOpening ? 'slide-in' : ''} ${isClosing ? 'slide-out' : ''}`} ref={sidebarRef}>
@@ -661,6 +772,8 @@ function App() {
           renderTodoView()
         ) : activeView === "quicklaunch" ? (
           renderQuickLaunchView()
+        ) : activeView === "pomodoro" ? (
+          renderPomodoroView()
         ) : null}
       </div>
     </div>
