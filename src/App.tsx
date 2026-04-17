@@ -145,6 +145,7 @@ function App() {
   const tools = [
     { id: "json", icon: "✨", label: "JSON 格式化", desc: "粘贴文本格式化" },
     { id: "todo", icon: "☑️", label: "待办事项", desc: "本地待办清单" },
+    { id: "clipboard", icon: "📋", label: "剪切板增强", desc: "复制历史与图片预览" },
     { id: "notepad", icon: "📝", label: "记事本", desc: "快速新建文本" },
     { id: "calc", icon: "🧮", label: "计算器", desc: "打开计算器" },
     { id: "terminal", icon: "🖥️", label: "终端", desc: "命令行面板" },
@@ -165,7 +166,7 @@ function App() {
   ];
 
   const handleToolClick = (toolId: string) => {
-    if (toolId === "json" || toolId === "todo" || toolId === "quicklaunch" || toolId === "pomodoro") {
+    if (toolId === "json" || toolId === "todo" || toolId === "quicklaunch" || toolId === "pomodoro" || toolId === "clipboard") {
       setActiveView(toolId);
     } else {
       let action = "";
@@ -276,6 +277,8 @@ function App() {
     }
   });
   const [todoInput, setTodoInput] = useState("");
+  const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
+  const [editingTodoText, setEditingTodoText] = useState("");
 
   useEffect(() => {
     localStorage.setItem("toolbox_todos", JSON.stringify(todos));
@@ -288,12 +291,34 @@ function App() {
   };
 
   const toggleTodo = (id: string) => {
+    if (editingTodoId === id) return;
     setTodos(todos.map(t => t.id === id ? { ...t, completed: !t.completed } : t));
   };
 
   const deleteTodo = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setTodos(todos.filter(t => t.id !== id));
+  };
+
+  const startEditTodo = (id: string, text: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingTodoId(id);
+    setEditingTodoText(text);
+  };
+
+  const saveEditTodo = () => {
+    if (editingTodoId && editingTodoText.trim()) {
+      setTodos(todos.map(t => t.id === editingTodoId ? { ...t, text: editingTodoText.trim() } : t));
+    }
+    setEditingTodoId(null);
+    setEditingTodoText("");
+  };
+
+  const cancelEditTodo = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      setEditingTodoId(null);
+      setEditingTodoText("");
+    }
   };
 
   const renderTodoView = () => (
@@ -327,14 +352,35 @@ function App() {
               <div className="todo-checkbox">
                 {todo.completed && <span className="todo-check-icon">✓</span>}
               </div>
-              <span className="todo-text">{todo.text}</span>
-              <button 
-                className="todo-delete-btn" 
-                onClick={(e) => deleteTodo(todo.id, e)}
-                title="删除"
-              >
-                ×
-              </button>
+              {editingTodoId === todo.id ? (
+                <input
+                  autoFocus
+                  className="todo-edit-input"
+                  value={editingTodoText}
+                  onChange={e => setEditingTodoText(e.target.value)}
+                  onBlur={saveEditTodo}
+                  onKeyDown={e => { if (e.key === 'Enter') saveEditTodo(); cancelEditTodo(e); }}
+                  onClick={e => e.stopPropagation()}
+                />
+              ) : (
+                <>
+                  <span className="todo-text">{todo.text}</span>
+                  <button 
+                    className="todo-edit-btn" 
+                    onClick={(e) => startEditTodo(todo.id, todo.text, e)}
+                    title="编辑"
+                  >
+                    ✏️
+                  </button>
+                  <button 
+                    className="todo-delete-btn" 
+                    onClick={(e) => deleteTodo(todo.id, e)}
+                    title="删除"
+                  >
+                    ×
+                  </button>
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -562,11 +608,267 @@ function App() {
   };
 
   // ============================================
+  // 剪切板增强逻辑
+  // ============================================
+  type ClipboardItem = { id: string; type: 'text' | 'image'; content: string; timestamp: number };
+  const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("toolbox_clipboard_history");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isMonitoring, setIsMonitoring] = useState(true);
+  const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null);
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const lastClipboardContent = useRef<string>("");
+
+  useEffect(() => {
+    localStorage.setItem("toolbox_clipboard_history", JSON.stringify(clipboardHistory));
+  }, [clipboardHistory]);
+
+  useEffect(() => {
+    if (!isMonitoring) return;
+
+    const checkClipboard = async () => {
+      try {
+        const { readText, readImage } = await import("@tauri-apps/plugin-clipboard-manager");
+        
+        let newText = "";
+        try {
+          newText = await readText() || "";
+        } catch {}
+
+        if (newText && newText !== lastClipboardContent.current) {
+          lastClipboardContent.current = newText;
+          const newItem: ClipboardItem = {
+            id: Date.now().toString(),
+            type: 'text',
+            content: newText.slice(0, 10000),
+            timestamp: Date.now(),
+          };
+          setClipboardHistory(prev => {
+            const filtered = prev.filter(item => !(item.type === 'text' && item.content === newText));
+            return [newItem, ...filtered].slice(0, 50);
+          });
+        }
+
+        try {
+          const imageData = await readImage();
+          if (imageData) {
+            const rgba = await imageData.rgba();
+            const size = await imageData.size();
+            const bytes = new Uint8Array(rgba);
+            const width = size.width;
+            const height = size.height;
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              const imgData = ctx.createImageData(width, height);
+              imgData.data.set(bytes);
+              ctx.putImageData(imgData, 0, 0);
+              const imageContent = canvas.toDataURL('image/png');
+              
+              if (imageContent !== lastClipboardContent.current) {
+                lastClipboardContent.current = imageContent;
+                const newItem: ClipboardItem = {
+                  id: Date.now().toString(),
+                  type: 'image',
+                  content: imageContent,
+                  timestamp: Date.now(),
+                };
+                setClipboardHistory(prev => [newItem, ...prev].slice(0, 50));
+              }
+            }
+          }
+        } catch {}
+      } catch {}
+    };
+
+    const interval = window.setInterval(checkClipboard, 800);
+    return () => clearInterval(interval);
+  }, [isMonitoring]);
+
+  const copyToClipboard = async (item: ClipboardItem) => {
+    try {
+      const { writeText, writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
+      if (item.type === 'text') {
+        await writeText(item.content);
+        lastClipboardContent.current = item.content;
+      } else if (item.type === 'image') {
+        const base64Data = item.content.split(',')[1];
+        const binaryString = atob(base64Data);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        await writeImage(bytes);
+        lastClipboardContent.current = item.content;
+      }
+    } catch {}
+  };
+
+  const deleteClipboardItem = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setClipboardHistory(prev => prev.filter(item => item.id !== id));
+  };
+
+  const clearClipboardHistory = () => {
+    setClipboardHistory([]);
+  };
+
+  const closePreview = () => {
+    setPreviewItem(null);
+    setPreviewZoom(1);
+  };
+
+  const formatClipboardTime = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return "刚刚";
+    if (diffMins < 60) return `${diffMins}分钟前`;
+    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}小时前`;
+    return date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
+  };
+
+  const renderClipboardView = () => (
+    <div className="sub-view">
+      <div className="sub-view-header">
+        <div className="back-btn" onClick={() => setActiveView("main")}>
+          <span className="back-icon">←</span> 返回
+        </div>
+        <h2 className="sub-view-title">剪切板增强</h2>
+        <div className="clipboard-header-actions">
+          <button 
+            className={`clipboard-monitor-btn ${isMonitoring ? 'active' : ''}`}
+            onClick={() => setIsMonitoring(!isMonitoring)}
+            title={isMonitoring ? "点击暂停监控" : "点击开始监控"}
+          >
+            {isMonitoring ? "⏸️ 监控中" : "▶️ 已暂停"}
+          </button>
+          {clipboardHistory.length > 0 && (
+            <button className="clipboard-clear-btn" onClick={clearClipboardHistory} title="清空历史">
+              🗑️ 清空
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="sub-view-content clipboard-container">
+        {clipboardHistory.length === 0 ? (
+          <div className="clipboard-empty">
+            <div className="clipboard-empty-icon">📋</div>
+            <div className="clipboard-empty-text">暂无复制记录</div>
+            <div className="clipboard-empty-hint">复制文本或图片后将自动记录</div>
+          </div>
+        ) : (
+          <div className="clipboard-list">
+            {clipboardHistory.map(item => (
+              <div 
+                key={item.id} 
+                className="clipboard-item"
+                onClick={() => copyToClipboard(item)}
+              >
+                <div className="clipboard-item-content">
+                  {item.type === 'text' ? (
+                    <div className="clipboard-text-preview">
+                      {item.content.slice(0, 200)}
+                      {item.content.length > 200 && "..."}
+                    </div>
+                  ) : (
+                    <div 
+                      className="clipboard-image-preview" 
+                      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setPreviewItem(item); }}
+                    >
+                      <img src={item.content} alt="复制图片" />
+                    </div>
+                  )}
+                </div>
+                <div className="clipboard-item-footer">
+                  <span className="clipboard-item-time">{formatClipboardTime(item.timestamp)}</span>
+                  <span className="clipboard-item-type">{item.type === 'text' ? "文本" : "图片"}</span>
+                  <button 
+                    className="clipboard-delete-btn" 
+                    onClick={(e) => deleteClipboardItem(item.id, e)}
+                    title="删除"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {previewItem && previewItem.type === 'image' && (
+        <div className="clipboard-preview-overlay" onClick={closePreview}>
+          <div className="clipboard-preview-panel" onClick={e => e.stopPropagation()}>
+            <div className="clipboard-preview-header">
+              <div className="clipboard-preview-zoom-controls">
+                <button className="clipboard-zoom-btn" onClick={() => setPreviewZoom(z => Math.max(0.25, z - 0.25))}>−</button>
+                <span className="clipboard-zoom-level">{Math.round(previewZoom * 100)}%</span>
+                <button className="clipboard-zoom-btn" onClick={() => setPreviewZoom(z => Math.min(4, z + 0.25))}>+</button>
+                <button className="clipboard-zoom-reset" onClick={() => setPreviewZoom(1)}>重置</button>
+              </div>
+              <button className="clipboard-preview-close" onClick={closePreview}>×</button>
+            </div>
+            <div className="clipboard-preview-content">
+              <img 
+                src={previewItem.content} 
+                alt="预览图片" 
+                style={{ transform: `scale(${previewZoom})`, transition: 'transform 0.2s ease' }}
+              />
+            </div>
+            <div className="clipboard-preview-footer">
+              <button className="clipboard-preview-copy" onClick={() => copyToClipboard(previewItem)}>
+                复制图片
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // ============================================
   // 番茄钟逻辑
   // ============================================
-  const [timeLeft, setTimeLeft] = useState(25 * 60);
+  const [focusDuration, setFocusDuration] = useState(() => {
+    try {
+      const saved = localStorage.getItem("toolbox_pomodoro_focus");
+      return saved ? parseInt(saved) : 25;
+    } catch {
+      return 25;
+    }
+  });
+  const [breakDuration, setBreakDuration] = useState(() => {
+    try {
+      const saved = localStorage.getItem("toolbox_pomodoro_break");
+      return saved ? parseInt(saved) : 5;
+    } catch {
+      return 5;
+    }
+  });
+  const [timeLeft, setTimeLeft] = useState(focusDuration * 60);
   const [isTimerActive, setIsTimerActive] = useState(false);
   const [isBreak, setIsBreak] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [tempFocusDuration, setTempFocusDuration] = useState(focusDuration.toString());
+  const [tempBreakDuration, setTempBreakDuration] = useState(breakDuration.toString());
+  
+  useEffect(() => {
+    localStorage.setItem("toolbox_pomodoro_focus", focusDuration.toString());
+  }, [focusDuration]);
+
+  useEffect(() => {
+    localStorage.setItem("toolbox_pomodoro_break", breakDuration.toString());
+  }, [breakDuration]);
   
   useEffect(() => {
     let interval: number | null = null;
@@ -615,13 +917,27 @@ function App() {
   
   const resetTimer = () => {
     setIsTimerActive(false);
-    setTimeLeft(isBreak ? 5 * 60 : 25 * 60);
+    setTimeLeft(isBreak ? breakDuration * 60 : focusDuration * 60);
   };
   
   const setMode = (breakMode: boolean) => {
     setIsBreak(breakMode);
     setIsTimerActive(false);
-    setTimeLeft(breakMode ? 5 * 60 : 25 * 60);
+    setTimeLeft(breakMode ? breakDuration * 60 : focusDuration * 60);
+  };
+
+  const savePomodoroSettings = () => {
+    const focus = parseInt(tempFocusDuration);
+    const breakVal = parseInt(tempBreakDuration);
+    if (focus >= 1 && focus <= 120) {
+      setFocusDuration(focus);
+      if (!isBreak) setTimeLeft(focus * 60);
+    }
+    if (breakVal >= 1 && breakVal <= 60) {
+      setBreakDuration(breakVal);
+      if (isBreak) setTimeLeft(breakVal * 60);
+    }
+    setShowSettings(false);
   };
 
   const formatTimer = (seconds: number) => {
@@ -637,6 +953,9 @@ function App() {
           <span className="back-icon">←</span> 返回
         </div>
         <h2 className="sub-view-title">番茄钟</h2>
+        <button className="pomodoro-settings-btn" onClick={() => setShowSettings(true)} title="设置">
+          ⚙️
+        </button>
       </div>
       <div className="sub-view-content pomodoro-container">
         <div className="pomodoro-modes">
@@ -644,13 +963,13 @@ function App() {
             className={`pomodoro-mode-btn ${!isBreak ? 'active' : ''}`}
             onClick={() => setMode(false)}
           >
-            专注模式 (25分钟)
+            专注模式 ({focusDuration}分钟)
           </button>
           <button 
             className={`pomodoro-mode-btn ${isBreak ? 'active' : ''}`}
             onClick={() => setMode(true)}
           >
-            休息模式 (5分钟)
+            休息模式 ({breakDuration}分钟)
           </button>
         </div>
         
@@ -669,6 +988,44 @@ function App() {
           </button>
         </div>
       </div>
+
+      {showSettings && (
+        <div className="pomodoro-settings-overlay" onClick={() => setShowSettings(false)}>
+          <div className="pomodoro-settings-panel" onClick={e => e.stopPropagation()}>
+            <h3 className="settings-title">番茄钟设置</h3>
+            <div className="settings-row">
+              <label className="settings-label">专注时间（分钟）</label>
+              <input
+                type="number"
+                className="settings-input"
+                value={tempFocusDuration}
+                onChange={e => setTempFocusDuration(e.target.value)}
+                min="1"
+                max="120"
+              />
+            </div>
+            <div className="settings-row">
+              <label className="settings-label">休息时间（分钟）</label>
+              <input
+                type="number"
+                className="settings-input"
+                value={tempBreakDuration}
+                onChange={e => setTempBreakDuration(e.target.value)}
+                min="1"
+                max="60"
+              />
+            </div>
+            <div className="settings-actions">
+              <button className="settings-cancel-btn" onClick={() => setShowSettings(false)}>
+                取消
+              </button>
+              <button className="settings-save-btn" onClick={savePomodoroSettings}>
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -770,6 +1127,8 @@ function App() {
           renderJsonView()
         ) : activeView === "todo" ? (
           renderTodoView()
+        ) : activeView === "clipboard" ? (
+          renderClipboardView()
         ) : activeView === "quicklaunch" ? (
           renderQuickLaunchView()
         ) : activeView === "pomodoro" ? (
