@@ -622,6 +622,9 @@ function App() {
   const [isMonitoring, setIsMonitoring] = useState(true);
   const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
+  const isDraggingPreview = useRef(false);
+  const dragStartPreview = useRef({ x: 0, y: 0 });
   const lastClipboardContent = useRef<string>("");
 
   useEffect(() => {
@@ -723,6 +726,33 @@ function App() {
   const closePreview = () => {
     setPreviewItem(null);
     setPreviewZoom(1);
+    setPreviewPan({ x: 0, y: 0 });
+  };
+
+  const handlePreviewWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    setPreviewZoom(z => Math.max(0.25, Math.min(4, z + delta)));
+  };
+
+  const handlePreviewMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 0) {
+      isDraggingPreview.current = true;
+      dragStartPreview.current = { x: e.clientX - previewPan.x, y: e.clientY - previewPan.y };
+    }
+  };
+
+  const handlePreviewMouseMove = (e: React.MouseEvent) => {
+    if (isDraggingPreview.current && previewZoom > 1) {
+      setPreviewPan({
+        x: e.clientX - dragStartPreview.current.x,
+        y: e.clientY - dragStartPreview.current.y,
+      });
+    }
+  };
+
+  const handlePreviewMouseUp = () => {
+    isDraggingPreview.current = false;
   };
 
   const formatClipboardTime = (timestamp: number) => {
@@ -818,11 +848,22 @@ function App() {
               </div>
               <button className="clipboard-preview-close" onClick={closePreview}>×</button>
             </div>
-            <div className="clipboard-preview-content">
+            <div 
+              className="clipboard-preview-content"
+              onWheel={handlePreviewWheel}
+              onMouseDown={handlePreviewMouseDown}
+              onMouseMove={handlePreviewMouseMove}
+              onMouseUp={handlePreviewMouseUp}
+              onMouseLeave={handlePreviewMouseUp}
+            >
               <img 
                 src={previewItem.content} 
                 alt="预览图片" 
-                style={{ transform: `scale(${previewZoom})`, transition: 'transform 0.2s ease' }}
+                style={{ 
+                  transform: `translate(${previewPan.x}px, ${previewPan.y}px) scale(${previewZoom})`,
+                  transition: isDraggingPreview.current ? 'none' : 'transform 0.2s ease',
+                  cursor: previewZoom > 1 ? (isDraggingPreview.current ? 'grabbing' : 'grab') : 'default'
+                }}
               />
             </div>
             <div className="clipboard-preview-footer">
