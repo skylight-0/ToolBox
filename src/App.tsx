@@ -9,6 +9,7 @@ import ClipboardView from "./features/clipboard/ClipboardView";
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
+import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
 import type { ActiveView, ToggleSwitchItem, ToolItem } from "./types/sidebar";
 
@@ -123,7 +124,8 @@ function App() {
       toolId === "todo" ||
       toolId === "quicklaunch" ||
       toolId === "pomodoro" ||
-      toolId === "clipboard"
+      toolId === "clipboard" ||
+      toolId === "textmanager"
     ) {
       setActiveView(toolId);
       return;
@@ -174,6 +176,8 @@ function App() {
         return <TodoView onBack={() => setActiveView("main")} />;
       case "clipboard":
         return <ClipboardView onBack={() => setActiveView("main")} />;
+      case "textmanager":
+        return <TextManagerView onBack={() => setActiveView("main")} />;
       case "quicklaunch":
         return (
           <QuickLaunchView

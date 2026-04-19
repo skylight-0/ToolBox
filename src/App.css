@@ -1312,6 +1312,203 @@ body,
 }
 
 /* ============================================
+   文本管理
+   ============================================ */
+.sub-view.textmanager-split-view {
+  flex-direction: row;
+  padding: 0;
+  gap: 0;
+}
+
+.textmanager-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.textmanager-main-header {
+  align-items: flex-start;
+}
+
+.textmanager-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.textmanager-toolbar {
+  padding: 18px 24px 0;
+}
+
+.textmanager-search {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.textmanager-search:focus,
+.textmanager-title-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.textmanager-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 16px;
+  padding: 16px 24px 24px;
+}
+
+.textmanager-list-panel,
+.textmanager-editor-panel {
+  min-height: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.textmanager-list-panel {
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.textmanager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.textmanager-item {
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.textmanager-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.textmanager-item.active {
+  border-color: var(--accent-color);
+  background: rgba(96, 205, 255, 0.12);
+  box-shadow: 0 0 0 1px rgba(96, 205, 255, 0.16);
+}
+
+.textmanager-item-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.textmanager-item-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.textmanager-item-delete {
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.textmanager-item-delete:hover {
+  color: #ff8484;
+  background: rgba(255, 92, 92, 0.12);
+}
+
+.textmanager-item-preview {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.textmanager-item-time {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.textmanager-editor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.textmanager-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.textmanager-copy-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.textmanager-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.textmanager-title-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.textmanager-textarea {
+  min-height: 320px;
+  resize: none;
+}
+
+.textmanager-empty,
+.textmanager-editor-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  padding: 24px;
+}
+
+/* ============================================
    番茄钟视图
    ============================================ */
 .pomodoro-container {
