@@ -6,7 +6,6 @@ import "./App.css";
 import MainSidebarView from "./components/MainSidebarView";
 import { TOOLS } from "./constants/sidebar";
 import ClipboardView from "./features/clipboard/ClipboardView";
-import HardwareMonitorView from "./features/hardware/HardwareMonitorView";
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
@@ -196,7 +195,6 @@ function App() {
     json: <JsonToolView onBack={() => setActiveView("main")} />,
     todo: <TodoView onBack={() => setActiveView("main")} />,
     clipboard: <ClipboardView onBack={() => setActiveView("main")} />,
-    hardware: <HardwareMonitorView onBack={() => setActiveView("main")} />,
     screenshot: (
       <ScreenshotEditorView
         onBack={() => setActiveView("main")}

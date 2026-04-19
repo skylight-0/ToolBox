@@ -7,6 +7,7 @@ import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } fro
 function PinnedImageWindow() {
   const label = new URLSearchParams(window.location.search).get("label") || "";
   const [imageData, setImageData] = useState("");
+  const [error, setError] = useState("");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const draggingRef = useRef(false);
@@ -17,7 +18,11 @@ function PinnedImageWindow() {
       try {
         const data = await invoke<string>("get_pinned_image", { label });
         setImageData(data);
-      } catch {}
+        setError("");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "读取钉图失败";
+        setError(message);
+      }
     };
 
     load();
@@ -25,6 +30,7 @@ function PinnedImageWindow() {
 
     listen<string>("pinned-image-updated", (event) => {
       setImageData(event.payload);
+      setError("");
     }).then((unlisten) => {
       cleanup = unlisten;
     });
@@ -58,6 +64,30 @@ function PinnedImageWindow() {
     draggingRef.current = false;
   };
 
+  const handleCopy = async () => {
+    if (!imageData) return;
+
+    try {
+      const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
+      const base64Data = imageData.split(",")[1];
+      if (!base64Data) {
+        throw new Error("钉图数据无效");
+      }
+
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i += 1) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      await writeImage(bytes);
+      setError("");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "复制钉图失败";
+      setError(message);
+    }
+  };
+
   return (
     <div className="pinned-window-root">
       <div className="pinned-window-toolbar" data-tauri-drag-region>
@@ -80,17 +110,7 @@ function PinnedImageWindow() {
           </button>
           <button
             className="pinned-window-btn"
-            onClick={async () => {
-              if (!imageData) return;
-              const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
-              const base64Data = imageData.split(",")[1];
-              const binaryString = atob(base64Data);
-              const bytes = new Uint8Array(binaryString.length);
-              for (let i = 0; i < binaryString.length; i += 1) {
-                bytes[i] = binaryString.charCodeAt(i);
-              }
-              await writeImage(bytes);
-            }}
+            onClick={handleCopy}
           >
             复制
           </button>
@@ -99,6 +119,7 @@ function PinnedImageWindow() {
           </button>
         </div>
       </div>
+      {error && <div className="hardware-monitor-error pinned-window-error">{error}</div>}
       {imageData ? (
         <div
           className="pinned-window-stage"

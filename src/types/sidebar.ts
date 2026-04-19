@@ -5,7 +5,6 @@ export type ActiveView =
   | "clipboard"
   | "quicklaunch"
   | "textmanager"
-  | "hardware"
   | "screenshot"
   | "pomodoro";
 

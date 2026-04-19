@@ -22,6 +22,7 @@ type RectShape = {
 };
 
 type ScreenshotTool =
+  | "select"
   | "freehand"
   | "eraser"
   | "rect"
@@ -134,6 +135,263 @@ function normalizeRect(start: Point, end: Point): RectShape {
   });
 }
 
+function pointInRect(point: Point, shape: RectShape, padding = 0) {
+  return (
+    point.x >= shape.x - padding &&
+    point.x <= shape.x + shape.width + padding &&
+    point.y >= shape.y - padding &&
+    point.y <= shape.y + shape.height + padding
+  );
+}
+
+function getPointsBounds(points: Point[], padding = 0): RectShape | null {
+  if (!points.length) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs) - padding;
+  const maxX = Math.max(...xs) + padding;
+  const minY = Math.min(...ys) - padding;
+  const maxY = Math.max(...ys) + padding;
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+  };
+}
+
+function getArrowBounds(annotation: ArrowAnnotation): RectShape {
+  const padding = Math.max(12, annotation.width * 3);
+  return normalizeRect(
+    { x: annotation.from.x - padding, y: annotation.from.y - padding },
+    { x: annotation.to.x + padding, y: annotation.to.y + padding },
+  );
+}
+
+function getTextBounds(
+  ctx: CanvasRenderingContext2D,
+  annotation: TextAnnotation,
+): RectShape {
+  ctx.save();
+  ctx.font = `${annotation.fontSize}px "Segoe UI", sans-serif`;
+  const lines = annotation.text.split("\n");
+  const maxWidth = Math.max(...lines.map((line) => ctx.measureText(line || " ").width), 1);
+  ctx.restore();
+  return {
+    x: annotation.position.x,
+    y: annotation.position.y,
+    width: maxWidth,
+    height: lines.length * (annotation.fontSize + 4),
+  };
+}
+
+function getAnnotationBounds(
+  ctx: CanvasRenderingContext2D,
+  annotation: Annotation,
+): RectShape | null {
+  switch (annotation.kind) {
+    case "freehand":
+    case "eraser":
+      return getPointsBounds(annotation.points, annotation.width);
+    case "rect":
+    case "highlight":
+    case "mosaic":
+      return clampRect(annotation.shape);
+    case "arrow":
+      return getArrowBounds(annotation);
+    case "text":
+      return getTextBounds(ctx, annotation);
+    default:
+      return null;
+  }
+}
+
+function movePoint(point: Point, delta: Point): Point {
+  return { x: point.x + delta.x, y: point.y + delta.y };
+}
+
+function moveAnnotation(annotation: Annotation, delta: Point): Annotation {
+  switch (annotation.kind) {
+    case "freehand":
+    case "eraser":
+      return {
+        ...annotation,
+        points: annotation.points.map((point) => movePoint(point, delta)),
+      };
+    case "rect":
+    case "highlight":
+    case "mosaic":
+      return {
+        ...annotation,
+        shape: {
+          ...annotation.shape,
+          x: annotation.shape.x + delta.x,
+          y: annotation.shape.y + delta.y,
+        },
+      };
+    case "arrow":
+      return {
+        ...annotation,
+        from: movePoint(annotation.from, delta),
+        to: movePoint(annotation.to, delta),
+      };
+    case "text":
+      return {
+        ...annotation,
+        position: movePoint(annotation.position, delta),
+      };
+    default:
+      return annotation;
+  }
+}
+
+function drawArrowHead(
+  context: CanvasRenderingContext2D,
+  from: Point,
+  to: Point,
+  color: string,
+  width: number,
+) {
+  const angle = Math.atan2(to.y - from.y, to.x - from.x);
+  const headLength = Math.max(10, width * 3);
+  context.strokeStyle = color;
+  context.lineWidth = width;
+  context.beginPath();
+  context.moveTo(to.x, to.y);
+  context.lineTo(
+    to.x - headLength * Math.cos(angle - Math.PI / 6),
+    to.y - headLength * Math.sin(angle - Math.PI / 6),
+  );
+  context.moveTo(to.x, to.y);
+  context.lineTo(
+    to.x - headLength * Math.cos(angle + Math.PI / 6),
+    to.y - headLength * Math.sin(angle + Math.PI / 6),
+  );
+  context.stroke();
+}
+
+function drawAnnotation(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  annotation: Annotation | DraftAnnotation,
+) {
+  switch (annotation.kind) {
+    case "freehand": {
+      if (annotation.points.length < 2) return;
+      ctx.strokeStyle = annotation.color;
+      ctx.lineWidth = annotation.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
+      for (const point of annotation.points.slice(1)) {
+        ctx.lineTo(point.x, point.y);
+      }
+      ctx.stroke();
+      return;
+    }
+    case "eraser": {
+      if (annotation.points.length < 2) return;
+      ctx.save();
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.strokeStyle = "rgba(0,0,0,1)";
+      ctx.lineWidth = annotation.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
+      for (const point of annotation.points.slice(1)) {
+        ctx.lineTo(point.x, point.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    case "rect": {
+      ctx.strokeStyle = annotation.color;
+      ctx.lineWidth = annotation.width;
+      ctx.strokeRect(
+        annotation.shape.x,
+        annotation.shape.y,
+        annotation.shape.width,
+        annotation.shape.height,
+      );
+      return;
+    }
+    case "highlight": {
+      ctx.save();
+      ctx.fillStyle = annotation.color;
+      ctx.globalAlpha = annotation.opacity;
+      ctx.fillRect(
+        annotation.shape.x,
+        annotation.shape.y,
+        annotation.shape.width,
+        annotation.shape.height,
+      );
+      ctx.restore();
+      return;
+    }
+    case "mosaic": {
+      const shape = clampRect(annotation.shape);
+      const block = Math.max(2, annotation.blockSize);
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = shape.width;
+      tempCanvas.height = shape.height;
+      const tempCtx = tempCanvas.getContext("2d");
+      if (!tempCtx) return;
+      tempCtx.drawImage(
+        canvas,
+        shape.x,
+        shape.y,
+        shape.width,
+        shape.height,
+        0,
+        0,
+        shape.width,
+        shape.height,
+      );
+      const imageData = tempCtx.getImageData(0, 0, shape.width, shape.height);
+      const { data } = imageData;
+      for (let y = 0; y < shape.height; y += block) {
+        for (let x = 0; x < shape.width; x += block) {
+          const offset = (y * shape.width + x) * 4;
+          const r = data[offset];
+          const g = data[offset + 1];
+          const b = data[offset + 2];
+          tempCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+          tempCtx.fillRect(x, y, block, block);
+        }
+      }
+      ctx.drawImage(tempCanvas, shape.x, shape.y);
+      return;
+    }
+    case "arrow": {
+      ctx.strokeStyle = annotation.color;
+      ctx.lineWidth = annotation.width;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(annotation.from.x, annotation.from.y);
+      ctx.lineTo(annotation.to.x, annotation.to.y);
+      ctx.stroke();
+      drawArrowHead(ctx, annotation.from, annotation.to, annotation.color, annotation.width);
+      return;
+    }
+    case "text": {
+      ctx.fillStyle = annotation.color;
+      ctx.font = `${annotation.fontSize}px "Segoe UI", sans-serif`;
+      ctx.textBaseline = "top";
+      const lines = annotation.text.split("\n");
+      lines.forEach((line, index) => {
+        ctx.fillText(
+          line,
+          annotation.position.x,
+          annotation.position.y + index * (annotation.fontSize + 4),
+        );
+      });
+    }
+  }
+}
+
 function ScreenshotEditorView({
   onBack,
   refreshToken,
@@ -143,6 +401,7 @@ function ScreenshotEditorView({
   const containerRef = useRef<HTMLDivElement>(null);
   const isDrawingRef = useRef(false);
   const draftStartRef = useRef<Point | null>(null);
+  const dragAnchorRef = useRef<Point | null>(null);
 
   const [baseImage, setBaseImage] = useState("");
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -157,6 +416,7 @@ function ScreenshotEditorView({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [scale, setScale] = useState(1);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchScreenshot = async () => {
@@ -167,6 +427,7 @@ function ScreenshotEditorView({
         setAnnotations([]);
         setDraftAnnotation(null);
         setCropSelection(null);
+        setSelectedAnnotationId(null);
         setTool("freehand");
         setError("");
       } catch (err) {
@@ -200,152 +461,22 @@ function ScreenshotEditorView({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(image, 0, 0);
 
-      const drawArrowHead = (
-        context: CanvasRenderingContext2D,
-        from: Point,
-        to: Point,
-        color: string,
-        width: number,
-      ) => {
-        const angle = Math.atan2(to.y - from.y, to.x - from.x);
-        const headLength = Math.max(10, width * 3);
-        context.strokeStyle = color;
-        context.lineWidth = width;
-        context.beginPath();
-        context.moveTo(to.x, to.y);
-        context.lineTo(
-          to.x - headLength * Math.cos(angle - Math.PI / 6),
-          to.y - headLength * Math.sin(angle - Math.PI / 6),
-        );
-        context.moveTo(to.x, to.y);
-        context.lineTo(
-          to.x - headLength * Math.cos(angle + Math.PI / 6),
-          to.y - headLength * Math.sin(angle + Math.PI / 6),
-        );
-        context.stroke();
-      };
-
-      const drawAnnotation = (annotation: Annotation | DraftAnnotation) => {
-        switch (annotation.kind) {
-          case "freehand": {
-            if (annotation.points.length < 2) return;
-            ctx.strokeStyle = annotation.color;
-            ctx.lineWidth = annotation.width;
-            ctx.lineCap = "round";
-            ctx.lineJoin = "round";
-            ctx.beginPath();
-            ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
-            for (const point of annotation.points.slice(1)) {
-              ctx.lineTo(point.x, point.y);
-            }
-            ctx.stroke();
-            return;
-          }
-          case "eraser": {
-            if (annotation.points.length < 2) return;
-            ctx.save();
-            ctx.globalCompositeOperation = "destination-out";
-            ctx.strokeStyle = "rgba(0,0,0,1)";
-            ctx.lineWidth = annotation.width;
-            ctx.lineCap = "round";
-            ctx.lineJoin = "round";
-            ctx.beginPath();
-            ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
-            for (const point of annotation.points.slice(1)) {
-              ctx.lineTo(point.x, point.y);
-            }
-            ctx.stroke();
-            ctx.restore();
-            return;
-          }
-          case "rect": {
-            ctx.strokeStyle = annotation.color;
-            ctx.lineWidth = annotation.width;
-            ctx.strokeRect(
-              annotation.shape.x,
-              annotation.shape.y,
-              annotation.shape.width,
-              annotation.shape.height,
-            );
-            return;
-          }
-          case "highlight": {
-            ctx.save();
-            ctx.fillStyle = annotation.color;
-            ctx.globalAlpha = annotation.opacity;
-            ctx.fillRect(
-              annotation.shape.x,
-              annotation.shape.y,
-              annotation.shape.width,
-              annotation.shape.height,
-            );
-            ctx.restore();
-            return;
-          }
-          case "mosaic": {
-            const shape = clampRect(annotation.shape);
-            const block = Math.max(2, annotation.blockSize);
-            const tempCanvas = document.createElement("canvas");
-            tempCanvas.width = shape.width;
-            tempCanvas.height = shape.height;
-            const tempCtx = tempCanvas.getContext("2d");
-            if (!tempCtx) return;
-            tempCtx.drawImage(
-              canvas,
-              shape.x,
-              shape.y,
-              shape.width,
-              shape.height,
-              0,
-              0,
-              shape.width,
-              shape.height,
-            );
-            const imageData = tempCtx.getImageData(0, 0, shape.width, shape.height);
-            const { data } = imageData;
-            for (let y = 0; y < shape.height; y += block) {
-              for (let x = 0; x < shape.width; x += block) {
-                const offset = (y * shape.width + x) * 4;
-                const r = data[offset];
-                const g = data[offset + 1];
-                const b = data[offset + 2];
-                tempCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-                tempCtx.fillRect(x, y, block, block);
-              }
-            }
-            ctx.drawImage(tempCanvas, shape.x, shape.y);
-            return;
-          }
-          case "arrow": {
-            ctx.strokeStyle = annotation.color;
-            ctx.lineWidth = annotation.width;
-            ctx.lineCap = "round";
-            ctx.beginPath();
-            ctx.moveTo(annotation.from.x, annotation.from.y);
-            ctx.lineTo(annotation.to.x, annotation.to.y);
-            ctx.stroke();
-            drawArrowHead(ctx, annotation.from, annotation.to, annotation.color, annotation.width);
-            return;
-          }
-          case "text": {
-            ctx.fillStyle = annotation.color;
-            ctx.font = `${annotation.fontSize}px "Segoe UI", sans-serif`;
-            ctx.textBaseline = "top";
-            const lines = annotation.text.split("\n");
-            lines.forEach((line, index) => {
-              ctx.fillText(
-                line,
-                annotation.position.x,
-                annotation.position.y + index * (annotation.fontSize + 4),
-              );
-            });
-          }
-        }
-      };
-
-      annotations.forEach(drawAnnotation);
+      annotations.forEach((annotation) => drawAnnotation(ctx, canvas, annotation));
       if (draftAnnotation) {
-        drawAnnotation(draftAnnotation);
+        drawAnnotation(ctx, canvas, draftAnnotation);
+      }
+
+      if (selectedAnnotationId) {
+        const selected = annotations.find((annotation) => annotation.id === selectedAnnotationId);
+        const bounds = selected ? getAnnotationBounds(ctx, selected) : null;
+        if (bounds) {
+          ctx.save();
+          ctx.strokeStyle = "#60CDFF";
+          ctx.lineWidth = 2;
+          ctx.setLineDash([10, 6]);
+          ctx.strokeRect(bounds.x - 4, bounds.y - 4, bounds.width + 8, bounds.height + 8);
+          ctx.restore();
+        }
       }
 
       if (cropSelection) {
@@ -371,7 +502,21 @@ function ScreenshotEditorView({
     };
 
     draw().catch(() => {});
-  }, [annotations, baseImage, cropSelection, draftAnnotation]);
+  }, [annotations, baseImage, cropSelection, draftAnnotation, selectedAnnotationId]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Delete" || event.key === "Backspace") {
+        if (!selectedAnnotationId) return;
+        event.preventDefault();
+        setAnnotations((current) => current.filter((item) => item.id !== selectedAnnotationId));
+        setSelectedAnnotationId(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedAnnotationId]);
 
   const getCanvasPoint = (event: ReactMouseEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -381,26 +526,58 @@ function ScreenshotEditorView({
     };
   };
 
+  const findAnnotationAtPoint = (point: Point) => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return null;
+
+    for (let index = annotations.length - 1; index >= 0; index -= 1) {
+      const annotation = annotations[index];
+      const bounds = getAnnotationBounds(ctx, annotation);
+      if (bounds && pointInRect(point, bounds, 8)) {
+        return annotation;
+      }
+    }
+
+    return null;
+  };
+
   const handleCanvasMouseDown = (event: ReactMouseEvent<HTMLCanvasElement>) => {
     if (!baseImage) return;
 
     const point = getCanvasPoint(event);
 
+    if (tool === "select") {
+      const hit = findAnnotationAtPoint(point);
+      setSelectedAnnotationId(hit?.id ?? null);
+      setCropSelection(null);
+      if (hit) {
+        isDrawingRef.current = true;
+        dragAnchorRef.current = point;
+      }
+      return;
+    }
+
+    setSelectedAnnotationId(null);
+
     if (tool === "text") {
       const text = window.prompt("输入要标注的文字");
       if (!text || !text.trim()) return;
 
+      const created = {
+        id: createId(),
+        kind: "text" as const,
+        color: brushColor,
+        fontSize,
+        position: point,
+        text: text.trim(),
+      };
+
       setAnnotations((current) => [
         ...current,
-        {
-          id: createId(),
-          kind: "text",
-          color: brushColor,
-          fontSize,
-          position: point,
-          text: text.trim(),
-        },
+        created,
       ]);
+      setSelectedAnnotationId(created.id);
       return;
     }
 
@@ -472,8 +649,23 @@ function ScreenshotEditorView({
   };
 
   const handleCanvasMouseMove = (event: ReactMouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawingRef.current || !draftStartRef.current) return;
     const point = getCanvasPoint(event);
+
+    if (tool === "select" && isDrawingRef.current && dragAnchorRef.current && selectedAnnotationId) {
+      const delta = {
+        x: point.x - dragAnchorRef.current.x,
+        y: point.y - dragAnchorRef.current.y,
+      };
+      dragAnchorRef.current = point;
+      setAnnotations((current) =>
+        current.map((annotation) =>
+          annotation.id === selectedAnnotationId ? moveAnnotation(annotation, delta) : annotation,
+        ),
+      );
+      return;
+    }
+
+    if (!isDrawingRef.current || !draftStartRef.current) return;
 
     if (tool === "freehand") {
       setDraftAnnotation((current) =>
@@ -540,15 +732,18 @@ function ScreenshotEditorView({
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
     draftStartRef.current = null;
+    dragAnchorRef.current = null;
 
-    if (tool === "crop") {
+    if (tool === "select" || tool === "crop") {
       setDraftAnnotation(null);
       return;
     }
 
     setDraftAnnotation((current) => {
       if (!current) return null;
-      setAnnotations((existing) => [...existing, { ...current, id: createId() } as Annotation]);
+      const created = { ...current, id: createId() } as Annotation;
+      setAnnotations((existing) => [...existing, created]);
+      setSelectedAnnotationId(created.id);
       return null;
     });
   };
@@ -643,12 +838,49 @@ function ScreenshotEditorView({
       setAnnotations([]);
       setDraftAnnotation(null);
       setCropSelection(null);
+      setSelectedAnnotationId(null);
       setTool("freehand");
     } catch (err) {
       const message = err instanceof Error ? err.message : "区域裁剪失败";
       setError(message);
     }
   };
+
+  const deleteSelectedAnnotation = () => {
+    if (!selectedAnnotationId) return;
+    setAnnotations((current) => current.filter((annotation) => annotation.id !== selectedAnnotationId));
+    setSelectedAnnotationId(null);
+  };
+
+  const editSelectedText = () => {
+    if (!selectedAnnotationId) return;
+    const target = annotations.find(
+      (annotation): annotation is TextAnnotation =>
+        annotation.id === selectedAnnotationId && annotation.kind === "text",
+    );
+    if (!target) return;
+
+    const text = window.prompt("编辑文字", target.text);
+    if (!text || !text.trim()) return;
+
+    setAnnotations((current) =>
+      current.map((annotation) =>
+        annotation.id === target.id
+          ? {
+              ...annotation,
+              text: text.trim(),
+              color: brushColor,
+              fontSize,
+            }
+          : annotation,
+      ),
+    );
+  };
+
+  const selectedTextAnnotation = annotations.find(
+    (annotation): annotation is TextAnnotation =>
+      annotation.id === selectedAnnotationId && annotation.kind === "text",
+  );
 
   const actions = (
     <div className="screenshot-actions">
@@ -668,6 +900,7 @@ function ScreenshotEditorView({
   );
 
   const toolButtons: Array<{ id: ScreenshotTool; label: string }> = [
+    { id: "select", label: "选择" },
     { id: "freehand", label: "画笔" },
     { id: "eraser", label: "橡皮擦" },
     { id: "rect", label: "矩形" },
@@ -747,14 +980,42 @@ function ScreenshotEditorView({
             />
             <span>{fontSize}px</span>
           </label>
-          <button className="screenshot-top-btn ghost" onClick={() => setAnnotations([])}>
+          <button
+            className="screenshot-top-btn ghost"
+            onClick={() => {
+              setAnnotations([]);
+              setSelectedAnnotationId(null);
+            }}
+          >
             清空标注
           </button>
           <button
             className="screenshot-top-btn ghost"
-            onClick={() => setAnnotations((current) => current.slice(0, -1))}
+            onClick={() =>
+              setAnnotations((current) => {
+                const next = current.slice(0, -1);
+                if (!next.some((item) => item.id === selectedAnnotationId)) {
+                  setSelectedAnnotationId(null);
+                }
+                return next;
+              })
+            }
           >
             撤销一步
+          </button>
+          <button
+            className="screenshot-top-btn ghost"
+            onClick={deleteSelectedAnnotation}
+            disabled={!selectedAnnotationId}
+          >
+            删除选中
+          </button>
+          <button
+            className="screenshot-top-btn ghost"
+            onClick={editSelectedText}
+            disabled={!selectedTextAnnotation}
+          >
+            编辑文字
           </button>
           <button
             className="screenshot-top-btn ghost"
@@ -767,6 +1028,13 @@ function ScreenshotEditorView({
             裁剪到选区
           </button>
         </div>
+
+        {selectedAnnotationId && (
+          <div className="screenshot-selection-tip">
+            已选中对象，可直接拖动位置，按 Delete 删除
+            {selectedTextAnnotation ? "，也可以编辑文字" : ""}
+          </div>
+        )}
 
         {error && <div className="hardware-monitor-error">{error}</div>}
 

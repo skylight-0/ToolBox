@@ -1,9 +1,7 @@
-use serde::Serialize;
-use std::fs;
 use std::collections::HashMap;
+use std::fs;
 use std::process::Command;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 use tauri::{
     LogicalPosition, LogicalSize, Manager, Position, Size, State, WebviewUrl, WebviewWindowBuilder,
 };
@@ -11,15 +9,15 @@ use tauri_plugin_global_shortcut::ShortcutState;
 
 struct AppState {
     sidebar_width: Mutex<u32>,
-    hardware_metrics_cache: Mutex<Option<CachedHardwareMetrics>>,
     latest_screenshot: Mutex<Option<String>>,
     pinned_images: Mutex<HashMap<String, String>>,
     pinned_window_counter: Mutex<u32>,
 }
 
-struct CachedHardwareMetrics {
-    metrics: HardwareMetrics,
-    sampled_at: Instant,
+fn remove_pinned_image(state: &AppState, label: &str) {
+    if let Ok(mut pinned_images) = state.pinned_images.lock() {
+        pinned_images.remove(label);
+    }
 }
 
 // 获取屏幕尺寸并定位窗口到右侧
@@ -139,22 +137,6 @@ fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String
     }
 }
 
-#[derive(Clone, Serialize)]
-struct HardwareMetrics {
-    cpu_usage: Option<f64>,
-    gpu_usage: Option<f64>,
-    memory_usage: Option<f64>,
-    memory_used_gb: Option<f64>,
-    memory_total_gb: Option<f64>,
-    cpu_temperature: Option<f64>,
-    gpu_temperature: Option<f64>,
-    updated_at: Option<String>,
-}
-
-fn parse_metric(value: Option<&serde_json::Value>) -> Option<f64> {
-    value.and_then(|v| v.as_f64())
-}
-
 fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
     let (_, encoded) = data_url
         .split_once(',')
@@ -250,139 +232,47 @@ $bitmap.Dispose()
     }
 }
 
-fn collect_hardware_metrics() -> Result<HardwareMetrics, String> {
-    #[cfg(target_os = "windows")]
-    {
-        let script = r#"
-$ErrorActionPreference = 'SilentlyContinue'
-
-$cpuUsage = $null
-$cpuCounter = Get-Counter '\Processor Information(_Total)\% Processor Utility'
-if ($cpuCounter -and $cpuCounter.CounterSamples.Count -gt 0) {
-  $cpuUsage = [math]::Round($cpuCounter.CounterSamples[0].CookedValue, 1)
-}
-if ($null -eq $cpuUsage) {
-  $fallbackCpu = Get-Counter '\Processor(_Total)\% Processor Time'
-  if ($fallbackCpu -and $fallbackCpu.CounterSamples.Count -gt 0) {
-    $cpuUsage = [math]::Round($fallbackCpu.CounterSamples[0].CookedValue, 1)
-  }
-}
-
-$gpuUsage = $null
-$gpuCounters = Get-Counter '\GPU Engine(*)\Utilization Percentage'
-if ($gpuCounters) {
-  $sum = 0.0
-  foreach ($sample in $gpuCounters.CounterSamples) {
-    if ($sample.InstanceName -notlike '*_Total*') {
-      $sum += $sample.CookedValue
-    }
-  }
-  $gpuUsage = [math]::Round([math]::Min(100, [math]::Max(0, $sum)), 1)
-}
-
-$os = Get-CimInstance Win32_OperatingSystem
-$memoryTotalGb = $null
-$memoryUsedGb = $null
-$memoryUsage = $null
-if ($os) {
-  $totalKb = [double]$os.TotalVisibleMemorySize
-  $freeKb = [double]$os.FreePhysicalMemory
-  if ($totalKb -gt 0) {
-    $usedKb = $totalKb - $freeKb
-    $memoryTotalGb = [math]::Round($totalKb / 1MB, 1)
-    $memoryUsedGb = [math]::Round($usedKb / 1MB, 1)
-    $memoryUsage = [math]::Round(($usedKb / $totalKb) * 100, 1)
-  }
-}
-
-$cpuTemp = $null
-$thermal = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature
-if ($thermal) {
-  $firstTemp = $thermal | Select-Object -First 1
-  if ($firstTemp -and $firstTemp.CurrentTemperature) {
-    $cpuTemp = [math]::Round(($firstTemp.CurrentTemperature / 10) - 273.15, 1)
-  }
-}
-
-$gpuTemp = $null
-$nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
-if ($nvidiaSmi) {
-  $tempText = & $nvidiaSmi.Source --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>$null | Select-Object -First 1
-  if ($tempText) {
-    $parsedGpuTemp = 0.0
-    if ([double]::TryParse($tempText.Trim(), [ref]$parsedGpuTemp)) {
-      $gpuTemp = [math]::Round($parsedGpuTemp, 1)
-    }
-  }
-}
-
-[PSCustomObject]@{
-  cpu_usage = $cpuUsage
-  gpu_usage = $gpuUsage
-  memory_usage = $memoryUsage
-  memory_used_gb = $memoryUsedGb
-  memory_total_gb = $memoryTotalGb
-  cpu_temperature = $cpuTemp
-  gpu_temperature = $gpuTemp
-  updated_at = (Get-Date -Format 'HH:mm:ss')
-} | ConvertTo-Json -Compress
-"#;
-
-        let output = run_hidden_powershell(script)?;
-        let parsed: serde_json::Value =
-            serde_json::from_str(&output).map_err(|e| format!("解析硬件信息失败: {}", e))?;
-
-        Ok(HardwareMetrics {
-            cpu_usage: parse_metric(parsed.get("cpu_usage")),
-            gpu_usage: parse_metric(parsed.get("gpu_usage")),
-            memory_usage: parse_metric(parsed.get("memory_usage")),
-            memory_used_gb: parse_metric(parsed.get("memory_used_gb")),
-            memory_total_gb: parse_metric(parsed.get("memory_total_gb")),
-            cpu_temperature: parse_metric(parsed.get("cpu_temperature")),
-            gpu_temperature: parse_metric(parsed.get("gpu_temperature")),
-            updated_at: parsed
-                .get("updated_at")
-                .and_then(|v| v.as_str())
-                .map(|v| v.to_string()),
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Err("仅支持 Windows 平台".to_string())
+fn show_screenshot_editor(app: &tauri::AppHandle, state: &State<'_, AppState>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let current_width = state
+            .sidebar_width
+            .lock()
+            .ok()
+            .map(|value| *value)
+            .unwrap_or(400);
+        let screenshot_width = current_width.max(920);
+        position_window_right(&window, screenshot_width);
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("show-sidebar", ());
+        let _ = window.emit("open-screenshot-editor", ());
     }
 }
 
-#[tauri::command]
-fn get_hardware_metrics(state: State<'_, AppState>) -> Result<HardwareMetrics, String> {
-    const HARDWARE_CACHE_TTL: Duration = Duration::from_secs(5);
-
-    if let Ok(cache) = state.hardware_metrics_cache.lock() {
-        if let Some(cached) = &*cache {
-            if cached.sampled_at.elapsed() < HARDWARE_CACHE_TTL {
-                return Ok(cached.metrics.clone());
-            }
-        }
+#[cfg(target_os = "windows")]
+fn open_screenshot_selector_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("screenshot-selector") {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(());
     }
 
-    match collect_hardware_metrics() {
-        Ok(metrics) => {
-            if let Ok(mut cache) = state.hardware_metrics_cache.lock() {
-                *cache = Some(CachedHardwareMetrics {
-                    metrics: metrics.clone(),
-                    sampled_at: Instant::now(),
-                });
-            }
-            Ok(metrics)
-        }
-        Err(error) => {
-            if let Ok(cache) = state.hardware_metrics_cache.lock() {
-                if let Some(cached) = &*cache {
-                    return Ok(cached.metrics.clone());
-                }
-            }
-            Err(error)
-        }
-    }
+    WebviewWindowBuilder::new(
+        app,
+        "screenshot-selector",
+        WebviewUrl::App("index.html?mode=selector".into()),
+    )
+    .title("Screenshot Selector")
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .fullscreen(true)
+    .resizable(false)
+    .build()
+    .map_err(|e| format!("创建截图选择窗口失败: {}", e))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -395,20 +285,10 @@ fn capture_screenshot(app: tauri::AppHandle, state: State<'_, AppState>) -> Resu
         }
 
         if let Some(window) = app.get_webview_window("main") {
-            let current_width = state
-                .sidebar_width
-                .lock()
-                .ok()
-                .map(|value| *value)
-                .unwrap_or(400);
-            let screenshot_width = current_width.max(920);
-            position_window_right(&window, screenshot_width);
-            let _ = window.show();
-            let _ = window.set_focus();
-            let _ = window.emit("show-sidebar", ());
-            let _ = window.emit("open-screenshot-editor", ());
+            let _ = window.hide();
         }
 
+        open_screenshot_selector_window(&app)?;
         Ok(image)
     }
     #[cfg(not(target_os = "windows"))]
@@ -416,6 +296,31 @@ fn capture_screenshot(app: tauri::AppHandle, state: State<'_, AppState>) -> Resu
         let _ = app;
         let _ = state;
         Err("仅支持 Windows 平台".to_string())
+    }
+}
+
+#[tauri::command]
+fn confirm_screenshot_capture(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    data_url: String,
+) -> Result<(), String> {
+    if let Ok(mut latest) = state.latest_screenshot.lock() {
+        *latest = Some(data_url);
+    }
+
+    if let Some(window) = app.get_webview_window("screenshot-selector") {
+        let _ = window.close();
+    }
+
+    show_screenshot_editor(&app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_screenshot_capture(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("screenshot-selector") {
+        let _ = window.close();
     }
 }
 
@@ -617,11 +522,18 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| match event {
             // 在底层直接监听系统窗口级别的失焦事件
-            if let tauri::WindowEvent::Focused(focused) = event {
+            tauri::WindowEvent::Focused(focused) => {
                 if !focused {
                     let _ = window.emit("hide-sidebar", ());
+                }
+            }
+            tauri::WindowEvent::Destroyed => {
+                let label = window.label();
+                if label.starts_with("pinned-image-") {
+                    let state: State<'_, AppState> = window.state();
+                    remove_pinned_image(&state, label);
                 }
             }
         })
@@ -649,8 +561,9 @@ pub fn run() {
             system_action,
             launch_program,
             extract_program_icon,
-            get_hardware_metrics,
             capture_screenshot,
+            confirm_screenshot_capture,
+            cancel_screenshot_capture,
             get_latest_screenshot,
             save_image_data,
             open_pinned_image_window,
@@ -660,7 +573,6 @@ pub fn run() {
             // 初始化状态管理器
             app.manage(AppState {
                 sidebar_width: Mutex::new(400),
-                hardware_metrics_cache: Mutex::new(None),
                 latest_screenshot: Mutex::new(None),
                 pinned_images: Mutex::new(HashMap::new()),
                 pinned_window_counter: Mutex::new(0),
