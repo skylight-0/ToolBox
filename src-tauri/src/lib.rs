@@ -1,3 +1,5 @@
+use serde::Serialize;
+use std::process::Command;
 use std::sync::Mutex;
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, State};
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -122,7 +124,150 @@ fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String
         Err("仅支持 Windows 平台".to_string())
     }
 }
-use std::process::Command;
+
+#[derive(Serialize)]
+struct HardwareMetrics {
+    cpu_usage: Option<f64>,
+    gpu_usage: Option<f64>,
+    memory_usage: Option<f64>,
+    memory_used_gb: Option<f64>,
+    memory_total_gb: Option<f64>,
+    cpu_temperature: Option<f64>,
+    gpu_temperature: Option<f64>,
+    updated_at: Option<String>,
+}
+
+fn parse_metric(value: Option<&serde_json::Value>) -> Option<f64> {
+    value.and_then(|v| v.as_f64())
+}
+
+#[cfg(target_os = "windows")]
+fn run_hidden_powershell(script: &str) -> Result<String, String> {
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("执行 PowerShell 失败: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "硬件信息采集失败".to_string()
+        } else {
+            stderr
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
+fn get_hardware_metrics() -> Result<HardwareMetrics, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+
+$cpuUsage = $null
+$cpuCounter = Get-Counter '\Processor Information(_Total)\% Processor Utility'
+if ($cpuCounter -and $cpuCounter.CounterSamples.Count -gt 0) {
+  $cpuUsage = [math]::Round($cpuCounter.CounterSamples[0].CookedValue, 1)
+}
+if ($null -eq $cpuUsage) {
+  $fallbackCpu = Get-Counter '\Processor(_Total)\% Processor Time'
+  if ($fallbackCpu -and $fallbackCpu.CounterSamples.Count -gt 0) {
+    $cpuUsage = [math]::Round($fallbackCpu.CounterSamples[0].CookedValue, 1)
+  }
+}
+
+$gpuUsage = $null
+$gpuCounters = Get-Counter '\GPU Engine(*)\Utilization Percentage'
+if ($gpuCounters) {
+  $sum = 0.0
+  foreach ($sample in $gpuCounters.CounterSamples) {
+    if ($sample.InstanceName -notlike '*_Total*') {
+      $sum += $sample.CookedValue
+    }
+  }
+  $gpuUsage = [math]::Round([math]::Min(100, [math]::Max(0, $sum)), 1)
+}
+
+$os = Get-CimInstance Win32_OperatingSystem
+$memoryTotalGb = $null
+$memoryUsedGb = $null
+$memoryUsage = $null
+if ($os) {
+  $totalKb = [double]$os.TotalVisibleMemorySize
+  $freeKb = [double]$os.FreePhysicalMemory
+  if ($totalKb -gt 0) {
+    $usedKb = $totalKb - $freeKb
+    $memoryTotalGb = [math]::Round($totalKb / 1MB, 1)
+    $memoryUsedGb = [math]::Round($usedKb / 1MB, 1)
+    $memoryUsage = [math]::Round(($usedKb / $totalKb) * 100, 1)
+  }
+}
+
+$cpuTemp = $null
+$thermal = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature
+if ($thermal) {
+  $firstTemp = $thermal | Select-Object -First 1
+  if ($firstTemp -and $firstTemp.CurrentTemperature) {
+    $cpuTemp = [math]::Round(($firstTemp.CurrentTemperature / 10) - 273.15, 1)
+  }
+}
+
+$gpuTemp = $null
+$nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+if ($nvidiaSmi) {
+  $tempText = & $nvidiaSmi.Source --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>$null | Select-Object -First 1
+  if ($tempText) {
+    $parsedGpuTemp = 0.0
+    if ([double]::TryParse($tempText.Trim(), [ref]$parsedGpuTemp)) {
+      $gpuTemp = [math]::Round($parsedGpuTemp, 1)
+    }
+  }
+}
+
+[PSCustomObject]@{
+  cpu_usage = $cpuUsage
+  gpu_usage = $gpuUsage
+  memory_usage = $memoryUsage
+  memory_used_gb = $memoryUsedGb
+  memory_total_gb = $memoryTotalGb
+  cpu_temperature = $cpuTemp
+  gpu_temperature = $gpuTemp
+  updated_at = (Get-Date -Format 'HH:mm:ss')
+} | ConvertTo-Json -Compress
+"#;
+
+        let output = run_hidden_powershell(script)?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).map_err(|e| format!("解析硬件信息失败: {}", e))?;
+
+        Ok(HardwareMetrics {
+            cpu_usage: parse_metric(parsed.get("cpu_usage")),
+            gpu_usage: parse_metric(parsed.get("gpu_usage")),
+            memory_usage: parse_metric(parsed.get("memory_usage")),
+            memory_used_gb: parse_metric(parsed.get("memory_used_gb")),
+            memory_total_gb: parse_metric(parsed.get("memory_total_gb")),
+            cpu_temperature: parse_metric(parsed.get("cpu_temperature")),
+            gpu_temperature: parse_metric(parsed.get("gpu_temperature")),
+            updated_at: parsed
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(|v| v.to_string()),
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("仅支持 Windows 平台".to_string())
+    }
+}
 
 // 执行快捷系统调用
 #[tauri::command]
@@ -282,7 +427,8 @@ pub fn run() {
             toggle_taskbar,
             system_action,
             launch_program,
-            extract_program_icon
+            extract_program_icon,
+            get_hardware_metrics
         ])
         .setup(|app| {
             // 初始化状态管理器

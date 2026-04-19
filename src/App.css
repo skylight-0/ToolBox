@@ -1509,6 +1509,89 @@ body,
 }
 
 /* ============================================
+   硬件监控
+   ============================================ */
+.hardware-monitor-container {
+  gap: 18px;
+}
+
+.hardware-monitor-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.hardware-monitor-summary-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.hardware-monitor-updated {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.hardware-monitor-error {
+  color: #ff9b9b;
+  font-size: 13px;
+  padding: 12px 14px;
+  background: rgba(255, 92, 92, 0.12);
+  border: 1px solid rgba(255, 92, 92, 0.28);
+  border-radius: var(--radius-md);
+}
+
+.hardware-monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.hardware-card {
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.hardware-card-wide {
+  grid-column: 1 / -1;
+}
+
+.hardware-card-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.hardware-card-value {
+  margin-top: 10px;
+  font-size: 30px;
+  font-weight: 300;
+  line-height: 1.1;
+  color: var(--text-primary);
+  letter-spacing: -0.4px;
+}
+
+.hardware-card-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.hardware-monitor-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+
+/* ============================================
    番茄钟视图
    ============================================ */
 .pomodoro-container {

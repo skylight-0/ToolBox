@@ -5,6 +5,7 @@ export type ActiveView =
   | "clipboard"
   | "quicklaunch"
   | "textmanager"
+  | "hardware"
   | "pomodoro";
 
 export type ToolItem = {

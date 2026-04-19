@@ -4,6 +4,7 @@ export const TOOLS: ToolItem[] = [
   { id: "json", icon: "✨", label: "JSON 格式化", desc: "粘贴文本格式化" },
   { id: "todo", icon: "☑️", label: "待办事项", desc: "本地待办清单" },
   { id: "textmanager", icon: "🗂️", label: "文本管理", desc: "保存文本并按分组整理" },
+  { id: "hardware", icon: "🌡️", label: "硬件监控", desc: "查看温度、占用与内存状态" },
   { id: "clipboard", icon: "📋", label: "剪切板增强", desc: "复制历史与图片预览" },
   { id: "notepad", icon: "📝", label: "记事本", desc: "快速新建文本" },
   { id: "calc", icon: "🧮", label: "计算器", desc: "打开计算器" },

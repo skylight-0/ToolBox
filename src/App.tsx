@@ -6,6 +6,7 @@ import "./App.css";
 import MainSidebarView from "./components/MainSidebarView";
 import { TOOLS } from "./constants/sidebar";
 import ClipboardView from "./features/clipboard/ClipboardView";
+import HardwareMonitorView from "./features/hardware/HardwareMonitorView";
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
@@ -125,7 +126,8 @@ function App() {
       toolId === "quicklaunch" ||
       toolId === "pomodoro" ||
       toolId === "clipboard" ||
-      toolId === "textmanager"
+      toolId === "textmanager" ||
+      toolId === "hardware"
     ) {
       setActiveView(toolId);
       return;
@@ -176,6 +178,8 @@ function App() {
         return <TodoView onBack={() => setActiveView("main")} />;
       case "clipboard":
         return <ClipboardView onBack={() => setActiveView("main")} />;
+      case "hardware":
+        return <HardwareMonitorView onBack={() => setActiveView("main")} />;
       case "textmanager":
         return <TextManagerView onBack={() => setActiveView("main")} />;
       case "quicklaunch":
