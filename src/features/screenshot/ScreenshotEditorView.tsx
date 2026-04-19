@@ -21,7 +21,15 @@ type RectShape = {
   height: number;
 };
 
-type ScreenshotTool = "freehand" | "rect" | "arrow" | "text" | "crop";
+type ScreenshotTool =
+  | "freehand"
+  | "eraser"
+  | "rect"
+  | "highlight"
+  | "mosaic"
+  | "arrow"
+  | "text"
+  | "crop";
 
 type FreehandAnnotation = {
   id: string;
@@ -37,6 +45,28 @@ type RectAnnotation = {
   color: string;
   width: number;
   shape: RectShape;
+};
+
+type HighlightAnnotation = {
+  id: string;
+  kind: "highlight";
+  color: string;
+  shape: RectShape;
+  opacity: number;
+};
+
+type MosaicAnnotation = {
+  id: string;
+  kind: "mosaic";
+  shape: RectShape;
+  blockSize: number;
+};
+
+type EraserAnnotation = {
+  id: string;
+  kind: "eraser";
+  width: number;
+  points: Point[];
 };
 
 type ArrowAnnotation = {
@@ -59,13 +89,19 @@ type TextAnnotation = {
 
 type Annotation =
   | FreehandAnnotation
+  | EraserAnnotation
   | RectAnnotation
+  | HighlightAnnotation
+  | MosaicAnnotation
   | ArrowAnnotation
   | TextAnnotation;
 
 type DraftAnnotation =
   | Omit<FreehandAnnotation, "id">
+  | Omit<EraserAnnotation, "id">
   | Omit<RectAnnotation, "id">
+  | Omit<HighlightAnnotation, "id">
+  | Omit<MosaicAnnotation, "id">
   | Omit<ArrowAnnotation, "id">;
 
 function loadImage(src: string) {
@@ -81,13 +117,21 @@ function createId() {
   return Date.now().toString() + Math.random().toString(36).slice(2);
 }
 
-function normalizeRect(start: Point, end: Point): RectShape {
+function clampRect(shape: RectShape) {
   return {
+    ...shape,
+    width: Math.max(1, shape.width),
+    height: Math.max(1, shape.height),
+  };
+}
+
+function normalizeRect(start: Point, end: Point): RectShape {
+  return clampRect({
     x: Math.min(start.x, end.x),
     y: Math.min(start.y, end.y),
     width: Math.abs(end.x - start.x),
     height: Math.abs(end.y - start.y),
-  };
+  });
 }
 
 function ScreenshotEditorView({
@@ -107,6 +151,8 @@ function ScreenshotEditorView({
   const [tool, setTool] = useState<ScreenshotTool>("freehand");
   const [brushColor, setBrushColor] = useState("#ff4d4f");
   const [brushWidth, setBrushWidth] = useState(4);
+  const [highlightOpacity, setHighlightOpacity] = useState(0.25);
+  const [mosaicBlockSize, setMosaicBlockSize] = useState(14);
   const [fontSize, setFontSize] = useState(28);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -195,6 +241,23 @@ function ScreenshotEditorView({
             ctx.stroke();
             return;
           }
+          case "eraser": {
+            if (annotation.points.length < 2) return;
+            ctx.save();
+            ctx.globalCompositeOperation = "destination-out";
+            ctx.strokeStyle = "rgba(0,0,0,1)";
+            ctx.lineWidth = annotation.width;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            ctx.beginPath();
+            ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
+            for (const point of annotation.points.slice(1)) {
+              ctx.lineTo(point.x, point.y);
+            }
+            ctx.stroke();
+            ctx.restore();
+            return;
+          }
           case "rect": {
             ctx.strokeStyle = annotation.color;
             ctx.lineWidth = annotation.width;
@@ -204,6 +267,53 @@ function ScreenshotEditorView({
               annotation.shape.width,
               annotation.shape.height,
             );
+            return;
+          }
+          case "highlight": {
+            ctx.save();
+            ctx.fillStyle = annotation.color;
+            ctx.globalAlpha = annotation.opacity;
+            ctx.fillRect(
+              annotation.shape.x,
+              annotation.shape.y,
+              annotation.shape.width,
+              annotation.shape.height,
+            );
+            ctx.restore();
+            return;
+          }
+          case "mosaic": {
+            const shape = clampRect(annotation.shape);
+            const block = Math.max(2, annotation.blockSize);
+            const tempCanvas = document.createElement("canvas");
+            tempCanvas.width = shape.width;
+            tempCanvas.height = shape.height;
+            const tempCtx = tempCanvas.getContext("2d");
+            if (!tempCtx) return;
+            tempCtx.drawImage(
+              canvas,
+              shape.x,
+              shape.y,
+              shape.width,
+              shape.height,
+              0,
+              0,
+              shape.width,
+              shape.height,
+            );
+            const imageData = tempCtx.getImageData(0, 0, shape.width, shape.height);
+            const { data } = imageData;
+            for (let y = 0; y < shape.height; y += block) {
+              for (let x = 0; x < shape.width; x += block) {
+                const offset = (y * shape.width + x) * 4;
+                const r = data[offset];
+                const g = data[offset + 1];
+                const b = data[offset + 2];
+                tempCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                tempCtx.fillRect(x, y, block, block);
+              }
+            }
+            ctx.drawImage(tempCanvas, shape.x, shape.y);
             return;
           }
           case "arrow": {
@@ -307,11 +417,39 @@ function ScreenshotEditorView({
       return;
     }
 
+    if (tool === "eraser") {
+      setDraftAnnotation({
+        kind: "eraser",
+        width: brushWidth * 2.5,
+        points: [point, point],
+      });
+      return;
+    }
+
     if (tool === "rect") {
       setDraftAnnotation({
         kind: "rect",
         color: brushColor,
         width: brushWidth,
+        shape: normalizeRect(point, point),
+      });
+      return;
+    }
+
+    if (tool === "highlight") {
+      setDraftAnnotation({
+        kind: "highlight",
+        color: brushColor,
+        opacity: highlightOpacity,
+        shape: normalizeRect(point, point),
+      });
+      return;
+    }
+
+    if (tool === "mosaic") {
+      setDraftAnnotation({
+        kind: "mosaic",
+        blockSize: mosaicBlockSize,
         shape: normalizeRect(point, point),
       });
       return;
@@ -346,10 +484,41 @@ function ScreenshotEditorView({
       return;
     }
 
+    if (tool === "eraser") {
+      setDraftAnnotation((current) =>
+        current && current.kind === "eraser"
+          ? { ...current, points: [...current.points, point] }
+          : current,
+      );
+      return;
+    }
+
     if (tool === "rect") {
       setDraftAnnotation((current) =>
         current && current.kind === "rect"
           ? { ...current, shape: normalizeRect(draftStartRef.current as Point, point) }
+          : current,
+      );
+      return;
+    }
+
+    if (tool === "highlight") {
+      setDraftAnnotation((current) =>
+        current && current.kind === "highlight"
+          ? { ...current, shape: normalizeRect(draftStartRef.current as Point, point) }
+          : current,
+      );
+      return;
+    }
+
+    if (tool === "mosaic") {
+      setDraftAnnotation((current) =>
+        current && current.kind === "mosaic"
+          ? {
+              ...current,
+              blockSize: mosaicBlockSize,
+              shape: normalizeRect(draftStartRef.current as Point, point),
+            }
           : current,
       );
       return;
@@ -500,7 +669,10 @@ function ScreenshotEditorView({
 
   const toolButtons: Array<{ id: ScreenshotTool; label: string }> = [
     { id: "freehand", label: "画笔" },
+    { id: "eraser", label: "橡皮擦" },
     { id: "rect", label: "矩形" },
+    { id: "highlight", label: "高亮框" },
+    { id: "mosaic", label: "马赛克" },
     { id: "arrow", label: "箭头" },
     { id: "text", label: "文字" },
     { id: "crop", label: "裁剪" },
@@ -540,6 +712,29 @@ function ScreenshotEditorView({
               onChange={(event) => setBrushWidth(Number(event.target.value))}
             />
             <span>{brushWidth}px</span>
+          </label>
+          <label className="screenshot-toolbar-group">
+            高亮
+            <input
+              type="range"
+              min="0.1"
+              max="0.6"
+              step="0.05"
+              value={highlightOpacity}
+              onChange={(event) => setHighlightOpacity(Number(event.target.value))}
+            />
+            <span>{Math.round(highlightOpacity * 100)}%</span>
+          </label>
+          <label className="screenshot-toolbar-group">
+            马赛克
+            <input
+              type="range"
+              min="6"
+              max="30"
+              value={mosaicBlockSize}
+              onChange={(event) => setMosaicBlockSize(Number(event.target.value))}
+            />
+            <span>{mosaicBlockSize}px</span>
           </label>
           <label className="screenshot-toolbar-group">
             字号
