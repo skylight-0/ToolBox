@@ -1,11 +1,18 @@
 use serde::Serialize;
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, State};
 use tauri_plugin_global_shortcut::ShortcutState;
 
 struct AppState {
     sidebar_width: Mutex<u32>,
+    hardware_metrics_cache: Mutex<Option<CachedHardwareMetrics>>,
+}
+
+struct CachedHardwareMetrics {
+    metrics: HardwareMetrics,
+    sampled_at: Instant,
 }
 
 // 获取屏幕尺寸并定位窗口到右侧
@@ -125,7 +132,7 @@ fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct HardwareMetrics {
     cpu_usage: Option<f64>,
     gpu_usage: Option<f64>,
@@ -166,8 +173,7 @@ fn run_hidden_powershell(script: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-#[tauri::command]
-fn get_hardware_metrics() -> Result<HardwareMetrics, String> {
+fn collect_hardware_metrics() -> Result<HardwareMetrics, String> {
     #[cfg(target_os = "windows")]
     {
         let script = r#"
@@ -266,6 +272,39 @@ if ($nvidiaSmi) {
     #[cfg(not(target_os = "windows"))]
     {
         Err("仅支持 Windows 平台".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_hardware_metrics(state: State<'_, AppState>) -> Result<HardwareMetrics, String> {
+    const HARDWARE_CACHE_TTL: Duration = Duration::from_secs(5);
+
+    if let Ok(cache) = state.hardware_metrics_cache.lock() {
+        if let Some(cached) = &*cache {
+            if cached.sampled_at.elapsed() < HARDWARE_CACHE_TTL {
+                return Ok(cached.metrics.clone());
+            }
+        }
+    }
+
+    match collect_hardware_metrics() {
+        Ok(metrics) => {
+            if let Ok(mut cache) = state.hardware_metrics_cache.lock() {
+                *cache = Some(CachedHardwareMetrics {
+                    metrics: metrics.clone(),
+                    sampled_at: Instant::now(),
+                });
+            }
+            Ok(metrics)
+        }
+        Err(error) => {
+            if let Ok(cache) = state.hardware_metrics_cache.lock() {
+                if let Some(cached) = &*cache {
+                    return Ok(cached.metrics.clone());
+                }
+            }
+            Err(error)
+        }
     }
 }
 
@@ -434,6 +473,7 @@ pub fn run() {
             // 初始化状态管理器
             app.manage(AppState {
                 sidebar_width: Mutex::new(400),
+                hardware_metrics_cache: Mutex::new(None),
             });
 
             // 注册 Alt+Space 全局快捷键

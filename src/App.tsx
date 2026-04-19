@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import "./App.css";
 import MainSidebarView from "./components/MainSidebarView";
 import { TOOLS } from "./constants/sidebar";
@@ -12,7 +12,7 @@ import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
 import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
-import type { ActiveView, ToggleSwitchItem, ToolItem } from "./types/sidebar";
+import type { ActiveView, ToggleSwitchItem, ToolId, ViewToolId } from "./types/sidebar";
 
 function App() {
   const [sidebarWidth, setSidebarWidth] = useState(400);
@@ -24,6 +24,12 @@ function App() {
   const [switchStates, setSwitchStates] = useState<Record<ToggleSwitchItem["id"], boolean>>({
     desktop: true,
     taskbar: true,
+  });
+  const [pendingSwitches, setPendingSwitches] = useState<
+    Record<ToggleSwitchItem["id"], boolean>
+  >({
+    desktop: false,
+    taskbar: false,
   });
 
   const sidebarRef = useRef<HTMLDivElement>(null);
@@ -119,81 +125,70 @@ function App() {
     event.preventDefault();
   };
 
-  const handleToolClick = (toolId: ToolItem["id"]) => {
-    if (
-      toolId === "json" ||
-      toolId === "todo" ||
-      toolId === "quicklaunch" ||
-      toolId === "pomodoro" ||
-      toolId === "clipboard" ||
-      toolId === "textmanager" ||
-      toolId === "hardware"
-    ) {
-      setActiveView(toolId);
+  const handleToolClick = (toolId: ToolId) => {
+    const tool = TOOLS.find((item) => item.id === toolId);
+    if (!tool) return;
+
+    if (tool.kind === "view") {
+      setActiveView(tool.view);
       return;
     }
 
-    let action = "";
-    if (toolId === "settings") action = "settings";
-    if (toolId === "notepad") action = "notepad";
-    if (toolId === "calc") action = "calc";
-    if (toolId === "terminal") action = "terminal";
-
-    if (action) {
-      invoke("system_action", { action }).catch(console.error);
-    }
+    invoke("system_action", { action: tool.action }).catch(console.error);
   };
 
-  const handleSwitchClick = (switchId: ToggleSwitchItem["id"]) => {
+  const handleSwitchClick = async (switchId: ToggleSwitchItem["id"]) => {
+    if (pendingSwitches[switchId]) return;
+
+    const previousValue = switchStates[switchId];
     const willBeActive = !switchStates[switchId];
     setSwitchStates((current) => ({ ...current, [switchId]: willBeActive }));
+    setPendingSwitches((current) => ({ ...current, [switchId]: true }));
 
-    if (switchId === "desktop") {
-      invoke("toggle_desktop", { show: willBeActive }).catch(console.error);
-    } else if (switchId === "taskbar") {
-      invoke("toggle_taskbar", { show: willBeActive }).catch(console.error);
+    try {
+      if (switchId === "desktop") {
+        await invoke("toggle_desktop", { show: willBeActive });
+      } else if (switchId === "taskbar") {
+        await invoke("toggle_taskbar", { show: willBeActive });
+      }
+    } catch (error) {
+      console.error(error);
+      setSwitchStates((current) => ({ ...current, [switchId]: previousValue }));
+    } finally {
+      setPendingSwitches((current) => ({ ...current, [switchId]: false }));
     }
   };
 
   const switches: ToggleSwitchItem[] = [
-    { id: "desktop", icon: "👁️", label: "桌面图标", active: switchStates.desktop },
-    { id: "taskbar", icon: "🚀", label: "任务栏", active: switchStates.taskbar },
+    {
+      id: "desktop",
+      icon: "👁️",
+      label: "桌面图标",
+      active: switchStates.desktop,
+      pending: pendingSwitches.desktop,
+    },
+    {
+      id: "taskbar",
+      icon: "🚀",
+      label: "任务栏",
+      active: switchStates.taskbar,
+      pending: pendingSwitches.taskbar,
+    },
   ];
 
-  const renderActiveView = () => {
-    switch (activeView) {
-      case "main":
-        return (
-          <MainSidebarView
-            currentTime={currentTime}
-            tools={TOOLS}
-            switches={switches}
-            onToolClick={handleToolClick}
-            onSwitchClick={handleSwitchClick}
-          />
-        );
-      case "json":
-        return <JsonToolView onBack={() => setActiveView("main")} />;
-      case "todo":
-        return <TodoView onBack={() => setActiveView("main")} />;
-      case "clipboard":
-        return <ClipboardView onBack={() => setActiveView("main")} />;
-      case "hardware":
-        return <HardwareMonitorView onBack={() => setActiveView("main")} />;
-      case "textmanager":
-        return <TextManagerView onBack={() => setActiveView("main")} />;
-      case "quicklaunch":
-        return (
-          <QuickLaunchView
-            onBack={() => setActiveView("main")}
-            isDialogOpenRef={isDialogOpenRef}
-          />
-        );
-      case "pomodoro":
-        return <PomodoroView onBack={() => setActiveView("main")} />;
-      default:
-        return null;
-    }
+  const renderers: Record<ViewToolId, ReactNode> = {
+    json: <JsonToolView onBack={() => setActiveView("main")} />,
+    todo: <TodoView onBack={() => setActiveView("main")} />,
+    clipboard: <ClipboardView onBack={() => setActiveView("main")} />,
+    hardware: <HardwareMonitorView onBack={() => setActiveView("main")} />,
+    textmanager: <TextManagerView onBack={() => setActiveView("main")} />,
+    quicklaunch: (
+      <QuickLaunchView
+        onBack={() => setActiveView("main")}
+        isDialogOpenRef={isDialogOpenRef}
+      />
+    ),
+    pomodoro: <PomodoroView onBack={() => setActiveView("main")} />,
   };
 
   return (
@@ -217,7 +212,19 @@ function App() {
         <div className="drag-handle-indicator" />
       </div>
 
-      <div className="sidebar-content">{renderActiveView()}</div>
+      <div className="sidebar-content">
+        {activeView === "main" ? (
+          <MainSidebarView
+            currentTime={currentTime}
+            tools={TOOLS}
+            switches={switches}
+            onToolClick={handleToolClick}
+            onSwitchClick={handleSwitchClick}
+          />
+        ) : (
+          renderers[activeView]
+        )}
+      </div>
     </div>
   );
 }

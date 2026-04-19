@@ -77,9 +77,9 @@ function MainSidebarView({
         <div className="switch-grid">
           {switches.map((item) => (
             <div
-              className={`switch-card ${item.active ? "active" : ""}`}
+              className={`switch-card ${item.active ? "active" : ""} ${item.pending ? "pending" : ""}`}
               key={item.id}
-              onClick={() => onSwitchClick(item.id)}
+              onClick={() => !item.pending && onSwitchClick(item.id)}
             >
               <div className="content-left">
                 <div className="switch-icon">{item.icon}</div>

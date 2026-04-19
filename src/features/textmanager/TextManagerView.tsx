@@ -74,12 +74,6 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
     localStorage.setItem("toolbox_text_entries", JSON.stringify(entries));
   }, [entries]);
 
-  useEffect(() => {
-    if (selectedEntryId && !entries.some((entry) => entry.id === selectedEntryId)) {
-      setSelectedEntryId(null);
-    }
-  }, [entries, selectedEntryId]);
-
   const filteredEntries = useMemo(() => {
     const keyword = searchKeyword.trim().toLowerCase();
     return entries
@@ -95,15 +89,13 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
   }, [activeGroupId, entries, searchKeyword]);
 
   const selectedEntry =
-    entries.find((entry) => entry.id === selectedEntryId) ??
-    filteredEntries[0] ??
-    null;
+    filteredEntries.find((entry) => entry.id === selectedEntryId) ?? filteredEntries[0] ?? null;
 
   useEffect(() => {
-    if (!selectedEntry && filteredEntries.length > 0) {
-      setSelectedEntryId(filteredEntries[0].id);
+    if (!filteredEntries.some((entry) => entry.id === selectedEntryId)) {
+      setSelectedEntryId(filteredEntries[0]?.id ?? null);
     }
-  }, [filteredEntries, selectedEntry]);
+  }, [filteredEntries, selectedEntryId]);
 
   const saveEditGroup = (id: string) => {
     if (editingGroupName.trim()) {

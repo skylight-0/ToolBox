@@ -8,16 +8,31 @@ export type ActiveView =
   | "hardware"
   | "pomodoro";
 
-export type ToolItem = {
-  id: Exclude<ActiveView, "main"> | "notepad" | "calc" | "terminal" | "settings";
+export type ViewToolId = Exclude<ActiveView, "main">;
+export type SystemAction = "notepad" | "calc" | "terminal" | "settings";
+export type ToolId = ViewToolId | SystemAction;
+
+type ToolBase = {
+  id: ToolId;
   icon: string;
   label: string;
   desc: string;
 };
+
+export type ToolItem =
+  | (ToolBase & {
+      kind: "view";
+      view: ViewToolId;
+    })
+  | (ToolBase & {
+      kind: "action";
+      action: SystemAction;
+    });
 
 export type ToggleSwitchItem = {
   id: "desktop" | "taskbar";
   icon: string;
   label: string;
   active: boolean;
+  pending?: boolean;
 };

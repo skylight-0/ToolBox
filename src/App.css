@@ -437,6 +437,18 @@ body,
   transform: translateY(-1px);
 }
 
+.switch-card.pending {
+  opacity: 0.6;
+  cursor: wait;
+  transform: none;
+}
+
+.switch-card.pending:hover {
+  background: var(--bg-glass-low);
+  border-color: rgba(255, 255, 255, 0.05);
+  transform: none;
+}
+
 .switch-card .content-left {
   display: flex;
   align-items: center;

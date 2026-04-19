@@ -81,7 +81,7 @@ function HardwareMonitorView({ onBack }: HardwareMonitorViewProps) {
       <div className="sub-view-content hardware-monitor-container">
         <div className="hardware-monitor-summary">
           <div className="hardware-monitor-summary-text">
-            实时显示 CPU、GPU、内存使用情况，并尽力读取温度信息。
+            实时显示 CPU、GPU、内存使用情况，并显示系统可提供的温度传感器读数。
           </div>
           <div className="hardware-monitor-updated">
             {metrics.updated_at ? `更新于 ${metrics.updated_at}` : "等待首次采集..."}
@@ -96,7 +96,7 @@ function HardwareMonitorView({ onBack }: HardwareMonitorViewProps) {
             <div className="hardware-card-value">{formatPercent(metrics.cpu_usage)}</div>
           </div>
           <div className="hardware-card">
-            <div className="hardware-card-label">CPU 温度</div>
+            <div className="hardware-card-label">CPU 传感器读数</div>
             <div className="hardware-card-value">
               {isLoading ? "加载中..." : formatTemperature(metrics.cpu_temperature)}
             </div>
@@ -106,7 +106,7 @@ function HardwareMonitorView({ onBack }: HardwareMonitorViewProps) {
             <div className="hardware-card-value">{formatPercent(metrics.gpu_usage)}</div>
           </div>
           <div className="hardware-card">
-            <div className="hardware-card-label">GPU 温度</div>
+            <div className="hardware-card-label">GPU 传感器读数</div>
             <div className="hardware-card-value">
               {isLoading ? "加载中..." : formatTemperature(metrics.gpu_temperature)}
             </div>
@@ -121,7 +121,7 @@ function HardwareMonitorView({ onBack }: HardwareMonitorViewProps) {
         </div>
 
         <div className="hardware-monitor-note">
-          温度依赖 Windows 可提供的传感器数据。部分机器，尤其是某些 GPU 或主板环境下，温度可能显示为“不可用”。
+          温度读数不一定等同于 CPU 核心温度或独显核心温度。部分机器，尤其是 AMD、Intel 集显或某些主板环境下，读数可能不可用。
         </div>
       </div>
     </div>
