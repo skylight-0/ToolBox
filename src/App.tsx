@@ -10,6 +10,7 @@ import HardwareMonitorView from "./features/hardware/HardwareMonitorView";
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
+import ScreenshotEditorView from "./features/screenshot/ScreenshotEditorView";
 import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
 import type { ActiveView, ToggleSwitchItem, ToolId, ViewToolId } from "./types/sidebar";
@@ -21,6 +22,7 @@ function App() {
   const [isOpening, setIsOpening] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeView, setActiveView] = useState<ActiveView>("main");
+  const [screenshotRefreshToken, setScreenshotRefreshToken] = useState(0);
   const [switchStates, setSwitchStates] = useState<Record<ToggleSwitchItem["id"], boolean>>({
     desktop: true,
     taskbar: true,
@@ -69,11 +71,16 @@ function App() {
 
     const unlistenHide = listen("hide-sidebar", triggerHide);
     const unlistenBlur = listen("tauri://blur", triggerHide);
+    const unlistenScreenshot = listen("open-screenshot-editor", () => {
+      setActiveView("screenshot");
+      setScreenshotRefreshToken((current) => current + 1);
+    });
 
     return () => {
       unlistenShow.then((fn) => fn());
       unlistenHide.then((fn) => fn());
       unlistenBlur.then((fn) => fn());
+      unlistenScreenshot.then((fn) => fn());
       if (hideTimeoutId !== null) window.clearTimeout(hideTimeoutId);
     };
   }, []);
@@ -125,12 +132,21 @@ function App() {
     event.preventDefault();
   };
 
-  const handleToolClick = (toolId: ToolId) => {
+  const handleToolClick = async (toolId: ToolId) => {
     const tool = TOOLS.find((item) => item.id === toolId);
     if (!tool) return;
 
     if (tool.kind === "view") {
       setActiveView(tool.view);
+      return;
+    }
+
+    if (tool.kind === "capture") {
+      try {
+        await invoke("capture_screenshot");
+      } catch (error) {
+        console.error(error);
+      }
       return;
     }
 
@@ -181,6 +197,13 @@ function App() {
     todo: <TodoView onBack={() => setActiveView("main")} />,
     clipboard: <ClipboardView onBack={() => setActiveView("main")} />,
     hardware: <HardwareMonitorView onBack={() => setActiveView("main")} />,
+    screenshot: (
+      <ScreenshotEditorView
+        onBack={() => setActiveView("main")}
+        refreshToken={screenshotRefreshToken}
+        isDialogOpenRef={isDialogOpenRef}
+      />
+    ),
     textmanager: <TextManagerView onBack={() => setActiveView("main")} />,
     quicklaunch: (
       <QuickLaunchView

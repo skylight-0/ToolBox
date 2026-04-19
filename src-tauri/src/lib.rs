@@ -1,13 +1,18 @@
 use serde::Serialize;
+use std::fs;
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, State};
+use tauri::{
+    LogicalPosition, LogicalSize, Manager, Position, Size, State, WebviewUrl, WebviewWindowBuilder,
+};
 use tauri_plugin_global_shortcut::ShortcutState;
 
 struct AppState {
     sidebar_width: Mutex<u32>,
     hardware_metrics_cache: Mutex<Option<CachedHardwareMetrics>>,
+    latest_screenshot: Mutex<Option<String>>,
+    pinned_image: Mutex<Option<String>>,
 }
 
 struct CachedHardwareMetrics {
@@ -148,6 +153,52 @@ fn parse_metric(value: Option<&serde_json::Value>) -> Option<f64> {
     value.and_then(|v| v.as_f64())
 }
 
+fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    let (_, encoded) = data_url
+        .split_once(',')
+        .ok_or_else(|| "无效的图片数据".to_string())?;
+    decode_base64(encoded)
+}
+
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    let mut output = Vec::with_capacity(input.len() * 3 / 4);
+    let mut chunk = [0u8; 4];
+    let mut chunk_len = 0;
+
+    for byte in input.bytes() {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => 64,
+            b'\r' | b'\n' | b'\t' | b' ' => continue,
+            _ => return Err("图片数据包含无效字符".to_string()),
+        };
+
+        chunk[chunk_len] = value;
+        chunk_len += 1;
+
+        if chunk_len == 4 {
+            output.push((chunk[0] << 2) | (chunk[1] >> 4));
+            if chunk[2] != 64 {
+                output.push((chunk[1] << 4) | (chunk[2] >> 2));
+            }
+            if chunk[3] != 64 {
+                output.push((chunk[2] << 6) | chunk[3]);
+            }
+            chunk_len = 0;
+        }
+    }
+
+    if chunk_len != 0 {
+        return Err("图片数据长度无效".to_string());
+    }
+
+    Ok(output)
+}
+
 #[cfg(target_os = "windows")]
 fn run_hidden_powershell(script: &str) -> Result<String, String> {
     let mut cmd = Command::new("powershell");
@@ -171,6 +222,30 @@ fn run_hidden_powershell(script: &str) -> Result<String, String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn capture_screen_data_url() -> Result<String, String> {
+    let script = r#"
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
+$bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($bounds.Left, $bounds.Top, 0, 0, $bitmap.Size)
+$memory = New-Object System.IO.MemoryStream
+$bitmap.Save($memory, [System.Drawing.Imaging.ImageFormat]::Png)
+$graphics.Dispose()
+$bitmap.Dispose()
+[Convert]::ToBase64String($memory.ToArray())
+"#;
+
+    let encoded = run_hidden_powershell(script)?;
+    if encoded.is_empty() {
+        Err("截图失败".to_string())
+    } else {
+        Ok(format!("data:image/png;base64,{}", encoded))
+    }
 }
 
 fn collect_hardware_metrics() -> Result<HardwareMetrics, String> {
@@ -306,6 +381,102 @@ fn get_hardware_metrics(state: State<'_, AppState>) -> Result<HardwareMetrics, S
             Err(error)
         }
     }
+}
+
+#[tauri::command]
+fn capture_screenshot(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let image = capture_screen_data_url()?;
+        if let Ok(mut latest) = state.latest_screenshot.lock() {
+            *latest = Some(image.clone());
+        }
+
+        if let Some(window) = app.get_webview_window("main") {
+            let current_width = state
+                .sidebar_width
+                .lock()
+                .ok()
+                .map(|value| *value)
+                .unwrap_or(400);
+            let screenshot_width = current_width.max(920);
+            position_window_right(&window, screenshot_width);
+            let _ = window.show();
+            let _ = window.set_focus();
+            let _ = window.emit("show-sidebar", ());
+            let _ = window.emit("open-screenshot-editor", ());
+        }
+
+        Ok(image)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        let _ = state;
+        Err("仅支持 Windows 平台".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_latest_screenshot(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .latest_screenshot
+        .lock()
+        .map_err(|_| "截图状态不可用".to_string())?
+        .clone()
+        .ok_or_else(|| "当前还没有可编辑的截图".to_string())
+}
+
+#[tauri::command]
+fn save_image_data(path: String, data_url: String) -> Result<(), String> {
+    let bytes = decode_data_url(&data_url)?;
+    fs::write(path, bytes).map_err(|e| format!("保存图片失败: {}", e))
+}
+
+#[tauri::command]
+fn get_pinned_image(state: State<'_, AppState>) -> Result<String, String> {
+    state
+        .pinned_image
+        .lock()
+        .map_err(|_| "钉图状态不可用".to_string())?
+        .clone()
+        .ok_or_else(|| "当前没有钉图内容".to_string())
+}
+
+#[tauri::command]
+fn open_pinned_image_window(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    data_url: String,
+) -> Result<(), String> {
+    if let Ok(mut pinned_image) = state.pinned_image.lock() {
+        *pinned_image = Some(data_url.clone());
+    }
+
+    if let Some(window) = app.get_webview_window("pinned-image") {
+        let _ = window.emit("pinned-image-updated", data_url);
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let window = WebviewWindowBuilder::new(
+        &app,
+        "pinned-image",
+        WebviewUrl::App("index.html?mode=pinned".into()),
+    )
+    .title("Pinned Screenshot")
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(true)
+    .inner_size(720.0, 480.0)
+    .build()
+    .map_err(|e| format!("创建钉图窗口失败: {}", e))?;
+
+    let _ = window.emit("pinned-image-updated", data_url);
+    Ok(())
 }
 
 // 执行快捷系统调用
@@ -451,9 +622,15 @@ pub fn run() {
         })
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state == ShortcutState::Pressed {
-                        toggle_sidebar_window(app);
+                        let shortcut = shortcut.to_string();
+                        if shortcut == "Alt+Space" {
+                            toggle_sidebar_window(app);
+                        } else if shortcut == "Alt+Shift+S" {
+                            let state: State<'_, AppState> = app.state();
+                            let _ = capture_screenshot(app.clone(), state);
+                        }
                     }
                 })
                 .build(),
@@ -467,18 +644,26 @@ pub fn run() {
             system_action,
             launch_program,
             extract_program_icon,
-            get_hardware_metrics
+            get_hardware_metrics,
+            capture_screenshot,
+            get_latest_screenshot,
+            save_image_data,
+            open_pinned_image_window,
+            get_pinned_image
         ])
         .setup(|app| {
             // 初始化状态管理器
             app.manage(AppState {
                 sidebar_width: Mutex::new(400),
                 hardware_metrics_cache: Mutex::new(None),
+                latest_screenshot: Mutex::new(None),
+                pinned_image: Mutex::new(None),
             });
 
             // 注册 Alt+Space 全局快捷键
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
             let _ = app.global_shortcut().register("Alt+Space");
+            let _ = app.global_shortcut().register("Alt+Shift+S");
 
             // 初始隐藏窗口
             if let Some(window) = app.get_webview_window("main") {

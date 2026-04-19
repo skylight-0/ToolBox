@@ -6,6 +6,7 @@ export type ActiveView =
   | "quicklaunch"
   | "textmanager"
   | "hardware"
+  | "screenshot"
   | "pomodoro";
 
 export type ViewToolId = Exclude<ActiveView, "main">;
@@ -23,6 +24,10 @@ export type ToolItem =
   | (ToolBase & {
       kind: "view";
       view: ViewToolId;
+    })
+  | (ToolBase & {
+      kind: "capture";
+      view: "screenshot";
     })
   | (ToolBase & {
       kind: "action";
