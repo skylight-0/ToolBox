@@ -4,12 +4,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 
 function PinnedImageWindow() {
+  const label = new URLSearchParams(window.location.search).get("label") || "";
   const [imageData, setImageData] = useState("");
 
   useEffect(() => {
     const load = async () => {
       try {
-        const data = await invoke<string>("get_pinned_image");
+        const data = await invoke<string>("get_pinned_image", { label });
         setImageData(data);
       } catch {}
     };
@@ -26,7 +27,7 @@ function PinnedImageWindow() {
     return () => {
       cleanup?.();
     };
-  }, []);
+  }, [label]);
 
   return (
     <div className="pinned-window-root">

@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::fs;
+use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -12,7 +13,8 @@ struct AppState {
     sidebar_width: Mutex<u32>,
     hardware_metrics_cache: Mutex<Option<CachedHardwareMetrics>>,
     latest_screenshot: Mutex<Option<String>>,
-    pinned_image: Mutex<Option<String>>,
+    pinned_images: Mutex<HashMap<String, String>>,
+    pinned_window_counter: Mutex<u32>,
 }
 
 struct CachedHardwareMetrics {
@@ -434,12 +436,13 @@ fn save_image_data(path: String, data_url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_pinned_image(state: State<'_, AppState>) -> Result<String, String> {
+fn get_pinned_image(state: State<'_, AppState>, label: String) -> Result<String, String> {
     state
-        .pinned_image
+        .pinned_images
         .lock()
         .map_err(|_| "钉图状态不可用".to_string())?
-        .clone()
+        .get(&label)
+        .cloned()
         .ok_or_else(|| "当前没有钉图内容".to_string())
 }
 
@@ -448,22 +451,24 @@ fn open_pinned_image_window(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     data_url: String,
-) -> Result<(), String> {
-    if let Ok(mut pinned_image) = state.pinned_image.lock() {
-        *pinned_image = Some(data_url.clone());
-    }
+) -> Result<String, String> {
+    let label = {
+        let mut counter = state
+            .pinned_window_counter
+            .lock()
+            .map_err(|_| "钉图计数器不可用".to_string())?;
+        *counter += 1;
+        format!("pinned-image-{}", *counter)
+    };
 
-    if let Some(window) = app.get_webview_window("pinned-image") {
-        let _ = window.emit("pinned-image-updated", data_url);
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
+    if let Ok(mut pinned_images) = state.pinned_images.lock() {
+        pinned_images.insert(label.clone(), data_url.clone());
     }
 
     let window = WebviewWindowBuilder::new(
         &app,
-        "pinned-image",
-        WebviewUrl::App("index.html?mode=pinned".into()),
+        &label,
+        WebviewUrl::App(format!("index.html?mode=pinned&label={label}").into()),
     )
     .title("Pinned Screenshot")
     .decorations(false)
@@ -476,7 +481,7 @@ fn open_pinned_image_window(
     .map_err(|e| format!("创建钉图窗口失败: {}", e))?;
 
     let _ = window.emit("pinned-image-updated", data_url);
-    Ok(())
+    Ok(label)
 }
 
 // 执行快捷系统调用
@@ -657,7 +662,8 @@ pub fn run() {
                 sidebar_width: Mutex::new(400),
                 hardware_metrics_cache: Mutex::new(None),
                 latest_screenshot: Mutex::new(None),
-                pinned_image: Mutex::new(None),
+                pinned_images: Mutex::new(HashMap::new()),
+                pinned_window_counter: Mutex::new(0),
             });
 
             // 注册 Alt+Space 全局快捷键

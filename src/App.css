@@ -1648,6 +1648,29 @@ body,
   border-radius: var(--radius-lg);
 }
 
+.screenshot-toolset {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.screenshot-tool-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.screenshot-tool-btn.active {
+  background: rgba(96, 205, 255, 0.16);
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
 .screenshot-toolbar-group {
   display: flex;
   align-items: center;
@@ -1674,6 +1697,16 @@ body,
   border-radius: var(--radius-md);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
   cursor: crosshair;
+}
+
+.screenshot-canvas.tool-text {
+  cursor: text;
+}
+
+.screenshot-top-btn:disabled,
+.screenshot-tool-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .screenshot-editor-empty {

@@ -14,11 +14,59 @@ type Point = {
   y: number;
 };
 
-type Stroke = {
+type RectShape = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type ScreenshotTool = "freehand" | "rect" | "arrow" | "text" | "crop";
+
+type FreehandAnnotation = {
+  id: string;
+  kind: "freehand";
   color: string;
   width: number;
   points: Point[];
 };
+
+type RectAnnotation = {
+  id: string;
+  kind: "rect";
+  color: string;
+  width: number;
+  shape: RectShape;
+};
+
+type ArrowAnnotation = {
+  id: string;
+  kind: "arrow";
+  color: string;
+  width: number;
+  from: Point;
+  to: Point;
+};
+
+type TextAnnotation = {
+  id: string;
+  kind: "text";
+  color: string;
+  fontSize: number;
+  position: Point;
+  text: string;
+};
+
+type Annotation =
+  | FreehandAnnotation
+  | RectAnnotation
+  | ArrowAnnotation
+  | TextAnnotation;
+
+type DraftAnnotation =
+  | Omit<FreehandAnnotation, "id">
+  | Omit<RectAnnotation, "id">
+  | Omit<ArrowAnnotation, "id">;
 
 function loadImage(src: string) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
@@ -29,6 +77,19 @@ function loadImage(src: string) {
   });
 }
 
+function createId() {
+  return Date.now().toString() + Math.random().toString(36).slice(2);
+}
+
+function normalizeRect(start: Point, end: Point): RectShape {
+  return {
+    x: Math.min(start.x, end.x),
+    y: Math.min(start.y, end.y),
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y),
+  };
+}
+
 function ScreenshotEditorView({
   onBack,
   refreshToken,
@@ -37,11 +98,16 @@ function ScreenshotEditorView({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isDrawingRef = useRef(false);
+  const draftStartRef = useRef<Point | null>(null);
+
   const [baseImage, setBaseImage] = useState("");
-  const [strokes, setStrokes] = useState<Stroke[]>([]);
-  const [activeStroke, setActiveStroke] = useState<Stroke | null>(null);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [draftAnnotation, setDraftAnnotation] = useState<DraftAnnotation | null>(null);
+  const [cropSelection, setCropSelection] = useState<RectShape | null>(null);
+  const [tool, setTool] = useState<ScreenshotTool>("freehand");
   const [brushColor, setBrushColor] = useState("#ff4d4f");
   const [brushWidth, setBrushWidth] = useState(4);
+  const [fontSize, setFontSize] = useState(28);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [scale, setScale] = useState(1);
@@ -52,8 +118,10 @@ function ScreenshotEditorView({
       try {
         const dataUrl = await invoke<string>("get_latest_screenshot");
         setBaseImage(dataUrl);
-        setStrokes([]);
-        setActiveStroke(null);
+        setAnnotations([]);
+        setDraftAnnotation(null);
+        setCropSelection(null);
+        setTool("freehand");
         setError("");
       } catch (err) {
         const message = err instanceof Error ? err.message : "读取截图失败";
@@ -86,28 +154,114 @@ function ScreenshotEditorView({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(image, 0, 0);
 
-      const drawStroke = (stroke: Stroke) => {
-        if (stroke.points.length < 2) return;
-        ctx.strokeStyle = stroke.color;
-        ctx.lineWidth = stroke.width;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.beginPath();
-        ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-        for (const point of stroke.points.slice(1)) {
-          ctx.lineTo(point.x, point.y);
-        }
-        ctx.stroke();
+      const drawArrowHead = (
+        context: CanvasRenderingContext2D,
+        from: Point,
+        to: Point,
+        color: string,
+        width: number,
+      ) => {
+        const angle = Math.atan2(to.y - from.y, to.x - from.x);
+        const headLength = Math.max(10, width * 3);
+        context.strokeStyle = color;
+        context.lineWidth = width;
+        context.beginPath();
+        context.moveTo(to.x, to.y);
+        context.lineTo(
+          to.x - headLength * Math.cos(angle - Math.PI / 6),
+          to.y - headLength * Math.sin(angle - Math.PI / 6),
+        );
+        context.moveTo(to.x, to.y);
+        context.lineTo(
+          to.x - headLength * Math.cos(angle + Math.PI / 6),
+          to.y - headLength * Math.sin(angle + Math.PI / 6),
+        );
+        context.stroke();
       };
 
-      strokes.forEach(drawStroke);
-      if (activeStroke) {
-        drawStroke(activeStroke);
+      const drawAnnotation = (annotation: Annotation | DraftAnnotation) => {
+        switch (annotation.kind) {
+          case "freehand": {
+            if (annotation.points.length < 2) return;
+            ctx.strokeStyle = annotation.color;
+            ctx.lineWidth = annotation.width;
+            ctx.lineCap = "round";
+            ctx.lineJoin = "round";
+            ctx.beginPath();
+            ctx.moveTo(annotation.points[0].x, annotation.points[0].y);
+            for (const point of annotation.points.slice(1)) {
+              ctx.lineTo(point.x, point.y);
+            }
+            ctx.stroke();
+            return;
+          }
+          case "rect": {
+            ctx.strokeStyle = annotation.color;
+            ctx.lineWidth = annotation.width;
+            ctx.strokeRect(
+              annotation.shape.x,
+              annotation.shape.y,
+              annotation.shape.width,
+              annotation.shape.height,
+            );
+            return;
+          }
+          case "arrow": {
+            ctx.strokeStyle = annotation.color;
+            ctx.lineWidth = annotation.width;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(annotation.from.x, annotation.from.y);
+            ctx.lineTo(annotation.to.x, annotation.to.y);
+            ctx.stroke();
+            drawArrowHead(ctx, annotation.from, annotation.to, annotation.color, annotation.width);
+            return;
+          }
+          case "text": {
+            ctx.fillStyle = annotation.color;
+            ctx.font = `${annotation.fontSize}px "Segoe UI", sans-serif`;
+            ctx.textBaseline = "top";
+            const lines = annotation.text.split("\n");
+            lines.forEach((line, index) => {
+              ctx.fillText(
+                line,
+                annotation.position.x,
+                annotation.position.y + index * (annotation.fontSize + 4),
+              );
+            });
+          }
+        }
+      };
+
+      annotations.forEach(drawAnnotation);
+      if (draftAnnotation) {
+        drawAnnotation(draftAnnotation);
+      }
+
+      if (cropSelection) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(
+          cropSelection.x,
+          cropSelection.y,
+          cropSelection.width,
+          cropSelection.height,
+        );
+        ctx.strokeStyle = "#60CDFF";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(
+          cropSelection.x,
+          cropSelection.y,
+          cropSelection.width,
+          cropSelection.height,
+        );
+        ctx.restore();
       }
     };
 
     draw().catch(() => {});
-  }, [activeStroke, baseImage, strokes]);
+  }, [annotations, baseImage, cropSelection, draftAnnotation]);
 
   const getCanvasPoint = (event: ReactMouseEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -117,32 +271,115 @@ function ScreenshotEditorView({
     };
   };
 
-  const startStroke = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+  const handleCanvasMouseDown = (event: ReactMouseEvent<HTMLCanvasElement>) => {
     if (!baseImage) return;
+
+    const point = getCanvasPoint(event);
+
+    if (tool === "text") {
+      const text = window.prompt("输入要标注的文字");
+      if (!text || !text.trim()) return;
+
+      setAnnotations((current) => [
+        ...current,
+        {
+          id: createId(),
+          kind: "text",
+          color: brushColor,
+          fontSize,
+          position: point,
+          text: text.trim(),
+        },
+      ]);
+      return;
+    }
+
     isDrawingRef.current = true;
-    const point = getCanvasPoint(event);
-    setActiveStroke({
-      color: brushColor,
-      width: brushWidth,
-      points: [point, point],
-    });
+    draftStartRef.current = point;
+
+    if (tool === "freehand") {
+      setDraftAnnotation({
+        kind: "freehand",
+        color: brushColor,
+        width: brushWidth,
+        points: [point, point],
+      });
+      return;
+    }
+
+    if (tool === "rect") {
+      setDraftAnnotation({
+        kind: "rect",
+        color: brushColor,
+        width: brushWidth,
+        shape: normalizeRect(point, point),
+      });
+      return;
+    }
+
+    if (tool === "arrow") {
+      setDraftAnnotation({
+        kind: "arrow",
+        color: brushColor,
+        width: brushWidth,
+        from: point,
+        to: point,
+      });
+      return;
+    }
+
+    if (tool === "crop") {
+      setCropSelection(normalizeRect(point, point));
+    }
   };
 
-  const extendStroke = (event: ReactMouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawingRef.current) return;
+  const handleCanvasMouseMove = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawingRef.current || !draftStartRef.current) return;
     const point = getCanvasPoint(event);
-    setActiveStroke((current) =>
-      current ? { ...current, points: [...current.points, point] } : current,
-    );
+
+    if (tool === "freehand") {
+      setDraftAnnotation((current) =>
+        current && current.kind === "freehand"
+          ? { ...current, points: [...current.points, point] }
+          : current,
+      );
+      return;
+    }
+
+    if (tool === "rect") {
+      setDraftAnnotation((current) =>
+        current && current.kind === "rect"
+          ? { ...current, shape: normalizeRect(draftStartRef.current as Point, point) }
+          : current,
+      );
+      return;
+    }
+
+    if (tool === "arrow") {
+      setDraftAnnotation((current) =>
+        current && current.kind === "arrow" ? { ...current, to: point } : current,
+      );
+      return;
+    }
+
+    if (tool === "crop") {
+      setCropSelection(normalizeRect(draftStartRef.current, point));
+    }
   };
 
-  const finishStroke = () => {
+  const handleCanvasMouseUp = () => {
     if (!isDrawingRef.current) return;
     isDrawingRef.current = false;
-    setActiveStroke((current) => {
-      if (current && current.points.length > 1) {
-        setStrokes((existing) => [...existing, current]);
-      }
+    draftStartRef.current = null;
+
+    if (tool === "crop") {
+      setDraftAnnotation(null);
+      return;
+    }
+
+    setDraftAnnotation((current) => {
+      if (!current) return null;
+      setAnnotations((existing) => [...existing, { ...current, id: createId() } as Annotation]);
       return null;
     });
   };
@@ -210,6 +447,40 @@ function ScreenshotEditorView({
     }
   };
 
+  const applyCrop = async () => {
+    if (!cropSelection) return;
+
+    try {
+      const image = await loadImage(await exportImage());
+      const offscreenCanvas = document.createElement("canvas");
+      offscreenCanvas.width = Math.max(1, Math.round(cropSelection.width));
+      offscreenCanvas.height = Math.max(1, Math.round(cropSelection.height));
+      const ctx = offscreenCanvas.getContext("2d");
+      if (!ctx) throw new Error("裁剪失败");
+
+      ctx.drawImage(
+        image,
+        cropSelection.x,
+        cropSelection.y,
+        cropSelection.width,
+        cropSelection.height,
+        0,
+        0,
+        offscreenCanvas.width,
+        offscreenCanvas.height,
+      );
+
+      setBaseImage(offscreenCanvas.toDataURL("image/png"));
+      setAnnotations([]);
+      setDraftAnnotation(null);
+      setCropSelection(null);
+      setTool("freehand");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "区域裁剪失败";
+      setError(message);
+    }
+  };
+
   const actions = (
     <div className="screenshot-actions">
       <button className="screenshot-top-btn ghost" onClick={recapture}>
@@ -227,11 +498,30 @@ function ScreenshotEditorView({
     </div>
   );
 
+  const toolButtons: Array<{ id: ScreenshotTool; label: string }> = [
+    { id: "freehand", label: "画笔" },
+    { id: "rect", label: "矩形" },
+    { id: "arrow", label: "箭头" },
+    { id: "text", label: "文字" },
+    { id: "crop", label: "裁剪" },
+  ];
+
   return (
     <div className="sub-view screenshot-view">
       <SubViewHeader title="截图标注" onBack={onBack} actions={actions} />
       <div className="sub-view-content screenshot-editor-container">
         <div className="screenshot-toolbar">
+          <div className="screenshot-toolset">
+            {toolButtons.map((item) => (
+              <button
+                key={item.id}
+                className={`screenshot-tool-btn ${tool === item.id ? "active" : ""}`}
+                onClick={() => setTool(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
           <label className="screenshot-toolbar-group">
             颜色
             <input
@@ -241,7 +531,7 @@ function ScreenshotEditorView({
             />
           </label>
           <label className="screenshot-toolbar-group">
-            线宽
+            粗细
             <input
               type="range"
               min="2"
@@ -251,14 +541,35 @@ function ScreenshotEditorView({
             />
             <span>{brushWidth}px</span>
           </label>
-          <button className="screenshot-top-btn ghost" onClick={() => setStrokes([])}>
+          <label className="screenshot-toolbar-group">
+            字号
+            <input
+              type="range"
+              min="16"
+              max="48"
+              value={fontSize}
+              onChange={(event) => setFontSize(Number(event.target.value))}
+            />
+            <span>{fontSize}px</span>
+          </label>
+          <button className="screenshot-top-btn ghost" onClick={() => setAnnotations([])}>
             清空标注
           </button>
           <button
             className="screenshot-top-btn ghost"
-            onClick={() => setStrokes((current) => current.slice(0, -1))}
+            onClick={() => setAnnotations((current) => current.slice(0, -1))}
           >
             撤销一步
+          </button>
+          <button
+            className="screenshot-top-btn ghost"
+            onClick={() => setCropSelection(null)}
+            disabled={!cropSelection}
+          >
+            清除选区
+          </button>
+          <button className="screenshot-top-btn" onClick={applyCrop} disabled={!cropSelection}>
+            裁剪到选区
           </button>
         </div>
 
@@ -270,11 +581,11 @@ function ScreenshotEditorView({
           ) : baseImage ? (
             <canvas
               ref={canvasRef}
-              className="screenshot-canvas"
-              onMouseDown={startStroke}
-              onMouseMove={extendStroke}
-              onMouseUp={finishStroke}
-              onMouseLeave={finishStroke}
+              className={`screenshot-canvas tool-${tool}`}
+              onMouseDown={handleCanvasMouseDown}
+              onMouseMove={handleCanvasMouseMove}
+              onMouseUp={handleCanvasMouseUp}
+              onMouseLeave={handleCanvasMouseUp}
             />
           ) : (
             <div className="screenshot-editor-empty">还没有截图，点击“重新截图”开始。</div>
