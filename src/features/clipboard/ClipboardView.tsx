@@ -3,7 +3,6 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, WheelEvent } from "react";
 import SubViewHeader from "../../components/SubViewHeader";
 import {
-  CLIPBOARD_STORAGE_KEY,
   type ClipboardGroup,
   type ClipboardItem,
   type ClipboardRecordInput,
@@ -110,7 +109,6 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
       const records = await invoke<ClipboardItem[]>("get_clipboard_history");
       const normalized = normalizeClipboardItems(records);
       setClipboardHistory(normalized);
-      localStorage.setItem(CLIPBOARD_STORAGE_KEY, JSON.stringify(normalized));
     } catch (error) {
       console.error(error);
     }

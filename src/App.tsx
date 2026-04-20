@@ -7,12 +7,13 @@ import MainSidebarView from "./components/MainSidebarView";
 import type { CommandPaletteResult } from "./components/MainSidebarView";
 import { TOOLS } from "./constants/sidebar";
 import ClipboardView from "./features/clipboard/ClipboardView";
-import { CLIPBOARD_STORAGE_KEY, getClipboardSearchFields, type ClipboardItem as ClipboardSearchItem, normalizeClipboardItems } from "./features/clipboard/clipboardModel";
+import { getClipboardSearchFields, type ClipboardItem as ClipboardSearchItem, normalizeClipboardItems } from "./features/clipboard/clipboardModel";
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
 import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
+import { TOOLBOX_DATA_CHANGED } from "./utils/dataSync";
 import type { ActiveView, ToggleSwitchItem, ToolId, ViewToolId } from "./types/sidebar";
 
 type SearchResultPayload =
@@ -54,15 +55,6 @@ type TodoSearchItem = {
   text: string;
   completed: boolean;
 };
-
-function loadStoredArray<T>(key: string): T[] {
-  try {
-    const saved = localStorage.getItem(key);
-    return saved ? (JSON.parse(saved) as T[]) : [];
-  } catch {
-    return [];
-  }
-}
 
 function getSearchScore(fields: string[], query: string) {
   if (!query) return 0;
@@ -123,6 +115,10 @@ function App() {
   const [commandQuery, setCommandQuery] = useState("");
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const [quickLaunchSearchItems, setQuickLaunchSearchItems] = useState<QuickLaunchSearchItem[]>([]);
+  const [clipboardSearchItems, setClipboardSearchItems] = useState<ClipboardSearchItem[]>([]);
+  const [textSearchEntries, setTextSearchEntries] = useState<TextEntrySearchItem[]>([]);
+  const [todoSearchItems, setTodoSearchItems] = useState<TodoSearchItem[]>([]);
   const [switchStates, setSwitchStates] = useState<Record<ToggleSwitchItem["id"], boolean>>({
     desktop: true,
     taskbar: true,
@@ -243,12 +239,37 @@ function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  useEffect(() => {
+    const loadUnifiedSearchData = () => {
+      void Promise.all([
+        invoke<{ groups: QuickLaunchSearchItem[]; items: QuickLaunchSearchItem[] }>("get_quicklaunch_data"),
+        invoke<ClipboardSearchItem[]>("get_clipboard_history"),
+        invoke<{ groups: unknown[]; entries: TextEntrySearchItem[] }>("get_text_manager_data"),
+        invoke<TodoSearchItem[]>("get_todos"),
+      ])
+        .then(([quicklaunchData, clipboardData, textData, todoData]) => {
+          setQuickLaunchSearchItems(quicklaunchData.items || []);
+          setClipboardSearchItems(normalizeClipboardItems(clipboardData));
+          setTextSearchEntries(textData.entries || []);
+          setTodoSearchItems(todoData || []);
+        })
+        .catch(console.error);
+    };
+
+    loadUnifiedSearchData();
+    const handleDataChanged = () => {
+      loadUnifiedSearchData();
+    };
+    window.addEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
+    return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
+  }, []);
+
   const commandResults = useMemo<SearchResult[]>(() => {
     const query = commandQuery.trim().toLowerCase();
-    const quickLaunchItems = loadStoredArray<QuickLaunchSearchItem>("toolbox_quicklaunch");
-    const clipboardItems = normalizeClipboardItems(loadStoredArray<ClipboardSearchItem>(CLIPBOARD_STORAGE_KEY));
-    const textEntries = loadStoredArray<TextEntrySearchItem>("toolbox_text_entries");
-    const todoItems = loadStoredArray<TodoSearchItem>("toolbox_todos");
+    const quickLaunchItems = quickLaunchSearchItems;
+    const clipboardItems = clipboardSearchItems;
+    const textEntries = textSearchEntries;
+    const todoItems = todoSearchItems;
 
     if (!query) {
       const suggestions: SearchResult[] = [
@@ -423,7 +444,7 @@ function App() {
         return groupDelta || right.score - left.score;
       })
       .slice(0, 12);
-  }, [commandQuery]);
+  }, [clipboardSearchItems, commandQuery, quickLaunchSearchItems, textSearchEntries, todoSearchItems]);
 
   useEffect(() => {
     if (!isCommandPaletteOpen) {

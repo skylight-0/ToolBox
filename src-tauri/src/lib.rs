@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::{
     LogicalPosition, LogicalSize, Manager, Monitor, Position, Size, State,
@@ -40,6 +40,63 @@ struct ClipboardRecordInput {
     pinned: Option<bool>,
     tags: Option<Vec<String>>,
     group: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TodoRecord {
+    id: String,
+    text: String,
+    completed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TextGroupRecord {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TextEntryRecord {
+    id: String,
+    title: String,
+    content: String,
+    #[serde(rename = "groupId")]
+    group_id: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TextManagerData {
+    groups: Vec<TextGroupRecord>,
+    entries: Vec<TextEntryRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QuickLaunchGroupRecord {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QuickLaunchItemRecord {
+    id: String,
+    name: String,
+    path: String,
+    icon: Option<String>,
+    alias: Option<String>,
+    #[serde(rename = "groupId")]
+    group_id: Option<String>,
+    #[serde(rename = "launchCount")]
+    launch_count: Option<i64>,
+    #[serde(rename = "lastLaunchedAt")]
+    last_launched_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QuickLaunchData {
+    groups: Vec<QuickLaunchGroupRecord>,
+    items: Vec<QuickLaunchItemRecord>,
 }
 
 // 获取屏幕尺寸并定位窗口到右侧
@@ -146,7 +203,7 @@ fn open_clipboard_db(state: &State<'_, AppState>) -> Result<Connection, String> 
         .map_err(|error| format!("打开剪贴板数据库失败: {}", error))
 }
 
-fn init_clipboard_db(path: &PathBuf) -> Result<(), String> {
+fn init_app_db(path: &PathBuf) -> Result<(), String> {
     let connection = Connection::open(path)
         .map_err(|error| format!("初始化剪贴板数据库失败: {}", error))?;
     connection
@@ -165,9 +222,49 @@ fn init_clipboard_db(path: &PathBuf) -> Result<(), String> {
 
             CREATE INDEX IF NOT EXISTS idx_clipboard_history_timestamp
             ON clipboard_history(timestamp DESC);
+
+            CREATE TABLE IF NOT EXISTS todo_items (
+                id TEXT PRIMARY KEY,
+                text TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS text_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS text_entries (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS quicklaunch_groups (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS quicklaunch_items (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                icon TEXT,
+                alias TEXT,
+                group_id TEXT,
+                launch_count INTEGER NOT NULL DEFAULT 0,
+                last_launched_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             ",
         )
-        .map_err(|error| format!("创建剪贴板数据表失败: {}", error))?;
+        .map_err(|error| format!("创建应用数据表失败: {}", error))?;
     Ok(())
 }
 
@@ -202,6 +299,99 @@ fn read_clipboard_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardR
         tags,
         group: row.get("group_name")?,
     })
+}
+
+fn replace_todos(connection: &Connection, todos: &[TodoRecord]) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM todo_items", [])
+        .map_err(|error| format!("清空待办数据失败: {}", error))?;
+    let mut statement = connection
+        .prepare("INSERT INTO todo_items (id, text, completed) VALUES (?1, ?2, ?3)")
+        .map_err(|error| format!("准备保存待办数据失败: {}", error))?;
+    for todo in todos {
+        statement
+            .execute(params![todo.id, todo.text, i64::from(todo.completed)])
+            .map_err(|error| format!("保存待办数据失败: {}", error))?;
+    }
+    Ok(())
+}
+
+fn replace_text_manager_data(connection: &Connection, data: &TextManagerData) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM text_groups", [])
+        .map_err(|error| format!("清空文本分组失败: {}", error))?;
+    connection
+        .execute("DELETE FROM text_entries", [])
+        .map_err(|error| format!("清空文本条目失败: {}", error))?;
+
+    let mut group_statement = connection
+        .prepare("INSERT INTO text_groups (id, name) VALUES (?1, ?2)")
+        .map_err(|error| format!("准备保存文本分组失败: {}", error))?;
+    for group in &data.groups {
+        group_statement
+            .execute(params![group.id, group.name])
+            .map_err(|error| format!("保存文本分组失败: {}", error))?;
+    }
+
+    let mut entry_statement = connection
+        .prepare(
+            "INSERT INTO text_entries (id, title, content, group_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )
+        .map_err(|error| format!("准备保存文本条目失败: {}", error))?;
+    for entry in &data.entries {
+        entry_statement
+            .execute(params![
+                entry.id,
+                entry.title,
+                entry.content,
+                entry.group_id,
+                entry.updated_at
+            ])
+            .map_err(|error| format!("保存文本条目失败: {}", error))?;
+    }
+    Ok(())
+}
+
+fn replace_quicklaunch_data(connection: &Connection, data: &QuickLaunchData) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM quicklaunch_groups", [])
+        .map_err(|error| format!("清空快捷启动分组失败: {}", error))?;
+    connection
+        .execute("DELETE FROM quicklaunch_items", [])
+        .map_err(|error| format!("清空快捷启动条目失败: {}", error))?;
+
+    let mut group_statement = connection
+        .prepare("INSERT INTO quicklaunch_groups (id, name) VALUES (?1, ?2)")
+        .map_err(|error| format!("准备保存快捷启动分组失败: {}", error))?;
+    for group in &data.groups {
+        group_statement
+            .execute(params![group.id, group.name])
+            .map_err(|error| format!("保存快捷启动分组失败: {}", error))?;
+    }
+
+    let mut item_statement = connection
+        .prepare(
+            "INSERT INTO quicklaunch_items
+             (id, name, path, icon, alias, group_id, launch_count, last_launched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+        .map_err(|error| format!("准备保存快捷启动条目失败: {}", error))?;
+    for item in &data.items {
+        item_statement
+            .execute(params![
+                item.id,
+                item.name,
+                item.path,
+                item.icon,
+                item.alias,
+                item.group_id,
+                item.launch_count.unwrap_or(0),
+                item.last_launched_at.unwrap_or(0),
+            ])
+            .map_err(|error| format!("保存快捷启动条目失败: {}", error))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -338,6 +528,182 @@ fn clear_clipboard_records(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn get_todos(state: State<'_, AppState>) -> Result<Vec<TodoRecord>, String> {
+    let connection = open_clipboard_db(&state)?;
+    let mut statement = connection
+        .prepare("SELECT id, text, completed FROM todo_items")
+        .map_err(|error| format!("读取待办失败: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(TodoRecord {
+                id: row.get("id")?,
+                text: row.get("text")?,
+                completed: row.get::<_, i64>("completed")? != 0,
+            })
+        })
+        .map_err(|error| format!("查询待办失败: {}", error))?;
+
+    rows.into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析待办失败: {}", error))
+}
+
+#[tauri::command]
+fn save_todos(state: State<'_, AppState>, todos: Vec<TodoRecord>) -> Result<(), String> {
+    let mut connection = open_clipboard_db(&state)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开始保存待办事务失败: {}", error))?;
+    replace_todos(&transaction, &todos)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("提交待办事务失败: {}", error))
+}
+
+#[tauri::command]
+fn get_text_manager_data(state: State<'_, AppState>) -> Result<TextManagerData, String> {
+    let connection = open_clipboard_db(&state)?;
+
+    let mut group_statement = connection
+        .prepare("SELECT id, name FROM text_groups ORDER BY id")
+        .map_err(|error| format!("读取文本分组失败: {}", error))?;
+    let groups = group_statement
+        .query_map([], |row| {
+            Ok(TextGroupRecord {
+                id: row.get("id")?,
+                name: row.get("name")?,
+            })
+        })
+        .map_err(|error| format!("查询文本分组失败: {}", error))?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析文本分组失败: {}", error))?;
+
+    let mut entry_statement = connection
+        .prepare("SELECT id, title, content, group_id, updated_at FROM text_entries")
+        .map_err(|error| format!("读取文本条目失败: {}", error))?;
+    let entries = entry_statement
+        .query_map([], |row| {
+            Ok(TextEntryRecord {
+                id: row.get("id")?,
+                title: row.get("title")?,
+                content: row.get("content")?,
+                group_id: row.get("group_id")?,
+                updated_at: row.get("updated_at")?,
+            })
+        })
+        .map_err(|error| format!("查询文本条目失败: {}", error))?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析文本条目失败: {}", error))?;
+
+    Ok(TextManagerData { groups, entries })
+}
+
+#[tauri::command]
+fn save_text_manager_data(
+    state: State<'_, AppState>,
+    data: TextManagerData,
+) -> Result<(), String> {
+    let mut connection = open_clipboard_db(&state)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开始保存文本管理事务失败: {}", error))?;
+    replace_text_manager_data(&transaction, &data)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("提交文本管理事务失败: {}", error))
+}
+
+#[tauri::command]
+fn get_quicklaunch_data(state: State<'_, AppState>) -> Result<QuickLaunchData, String> {
+    let connection = open_clipboard_db(&state)?;
+
+    let mut group_statement = connection
+        .prepare("SELECT id, name FROM quicklaunch_groups ORDER BY id")
+        .map_err(|error| format!("读取快捷启动分组失败: {}", error))?;
+    let groups = group_statement
+        .query_map([], |row| {
+            Ok(QuickLaunchGroupRecord {
+                id: row.get("id")?,
+                name: row.get("name")?,
+            })
+        })
+        .map_err(|error| format!("查询快捷启动分组失败: {}", error))?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析快捷启动分组失败: {}", error))?;
+
+    let mut item_statement = connection
+        .prepare(
+            "SELECT id, name, path, icon, alias, group_id, launch_count, last_launched_at
+             FROM quicklaunch_items",
+        )
+        .map_err(|error| format!("读取快捷启动条目失败: {}", error))?;
+    let items = item_statement
+        .query_map([], |row| {
+            Ok(QuickLaunchItemRecord {
+                id: row.get("id")?,
+                name: row.get("name")?,
+                path: row.get("path")?,
+                icon: row.get("icon")?,
+                alias: row.get("alias")?,
+                group_id: row.get("group_id")?,
+                launch_count: Some(row.get("launch_count")?),
+                last_launched_at: Some(row.get("last_launched_at")?),
+            })
+        })
+        .map_err(|error| format!("查询快捷启动条目失败: {}", error))?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析快捷启动条目失败: {}", error))?;
+
+    Ok(QuickLaunchData { groups, items })
+}
+
+#[tauri::command]
+fn save_quicklaunch_data(
+    state: State<'_, AppState>,
+    data: QuickLaunchData,
+) -> Result<(), String> {
+    let mut connection = open_clipboard_db(&state)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开始保存快捷启动事务失败: {}", error))?;
+    replace_quicklaunch_data(&transaction, &data)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("提交快捷启动事务失败: {}", error))
+}
+
+#[tauri::command]
+fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
+    let connection = open_clipboard_db(&state)?;
+    connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("读取设置失败: {}", error))
+}
+
+#[tauri::command]
+fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    connection
+        .execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )
+        .map_err(|error| format!("保存设置失败: {}", error))?;
+    Ok(())
+}
+
 // 供前端或底部托盘和快捷键统一调用的侧边栏切换逻辑
 fn show_sidebar_window(app_handle: &tauri::AppHandle, state: &State<'_, AppState>) {
     if let Some(window) = app_handle.get_webview_window("main") {
@@ -452,7 +818,15 @@ pub fn run() {
             insert_clipboard_record,
             update_clipboard_record,
             delete_clipboard_record,
-            clear_clipboard_records
+            clear_clipboard_records,
+            get_todos,
+            save_todos,
+            get_text_manager_data,
+            save_text_manager_data,
+            get_quicklaunch_data,
+            save_quicklaunch_data,
+            get_setting,
+            set_setting
         ])
         .setup(|app| {
             let app_data_dir = app
@@ -462,7 +836,7 @@ pub fn run() {
             fs::create_dir_all(&app_data_dir)
                 .map_err(|error| format!("创建应用数据目录失败: {}", error))?;
             let clipboard_db_path = app_data_dir.join("clipboard.sqlite");
-            init_clipboard_db(&clipboard_db_path)?;
+            init_app_db(&clipboard_db_path)?;
 
             // 初始化状态管理器
             app.manage(AppState {

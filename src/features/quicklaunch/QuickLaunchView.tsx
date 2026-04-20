@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import type { MouseEvent, MutableRefObject } from "react";
+import { notifyToolboxDataChanged } from "../../utils/dataSync";
 
 type QuickLaunchViewProps = {
   onBack: () => void;
@@ -51,23 +52,11 @@ function formatRecentTime(timestamp?: number) {
 }
 
 function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
-  const [quickLaunchGroups, setQuickLaunchGroups] = useState<QuickLaunchGroup[]>(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_quicklaunch_groups");
-      return saved ? JSON.parse(saved) : [{ id: "default", name: "默认分组" }];
-    } catch {
-      return [{ id: "default", name: "默认分组" }];
-    }
-  });
+  const [quickLaunchGroups, setQuickLaunchGroups] = useState<QuickLaunchGroup[]>([
+    { id: "default", name: "默认分组" },
+  ]);
   const [activeGroupId, setActiveGroupId] = useState("default");
-  const [quickLaunchItems, setQuickLaunchItems] = useState<QuickLaunchItem[]>(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_quicklaunch");
-      return saved ? normalizeQuickLaunchItems(JSON.parse(saved)) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [quickLaunchItems, setQuickLaunchItems] = useState<QuickLaunchItem[]>([]);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
@@ -76,19 +65,37 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("toolbox_quicklaunch_groups", JSON.stringify(quickLaunchGroups));
-  }, [quickLaunchGroups]);
+    invoke<{ groups: QuickLaunchGroup[]; items: QuickLaunchItem[] }>("get_quicklaunch_data")
+      .then((data) => {
+        setQuickLaunchGroups(
+          data.groups.length ? data.groups : [{ id: "default", name: "默认分组" }],
+        );
+        setQuickLaunchItems(normalizeQuickLaunchItems(data.items));
+      })
+      .catch(console.error);
+  }, []);
 
-  useEffect(() => {
-    localStorage.setItem("toolbox_quicklaunch", JSON.stringify(quickLaunchItems));
-  }, [quickLaunchItems]);
+  const persistQuickLaunchData = (
+    nextGroups: QuickLaunchGroup[],
+    nextItems: QuickLaunchItem[],
+  ) => {
+    const normalizedItems = normalizeQuickLaunchItems(nextItems);
+    setQuickLaunchGroups(nextGroups);
+    setQuickLaunchItems(normalizedItems);
+    void invoke("save_quicklaunch_data", {
+      data: { groups: nextGroups, items: normalizedItems },
+    })
+      .then(() => notifyToolboxDataChanged("quicklaunch"))
+      .catch(console.error);
+  };
 
   const saveEditGroup = (id: string) => {
     if (editingGroupName.trim()) {
-      setQuickLaunchGroups((current) =>
-        current.map((group) =>
+      persistQuickLaunchData(
+        quickLaunchGroups.map((group) =>
           group.id === id ? { ...group, name: editingGroupName.trim() } : group,
         ),
+        quickLaunchItems,
       );
     }
     setEditingGroupId(null);
@@ -97,7 +104,10 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
   const saveNewGroup = () => {
     if (newGroupName.trim()) {
       const id = Date.now().toString();
-      setQuickLaunchGroups((current) => [...current, { id, name: newGroupName.trim() }]);
+      persistQuickLaunchData(
+        [...quickLaunchGroups, { id, name: newGroupName.trim() }],
+        quickLaunchItems,
+      );
       setActiveGroupId(id);
     }
     setIsAddingGroup(false);
@@ -105,12 +115,11 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
   };
 
   const deleteGroup = (groupId: string) => {
-    setQuickLaunchItems((current) =>
-      current.map((item) =>
+    const nextItems = quickLaunchItems.map((item) =>
         item.groupId === groupId ? { ...item, groupId: "default" } : item,
-      ),
-    );
-    setQuickLaunchGroups((current) => current.filter((group) => group.id !== groupId));
+      );
+    const nextGroups = quickLaunchGroups.filter((group) => group.id !== groupId);
+    persistQuickLaunchData(nextGroups, nextItems);
     if (activeGroupId === groupId) {
       setActiveGroupId("default");
     }
@@ -146,15 +155,16 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
           lastLaunchedAt: 0,
         };
 
-        setQuickLaunchItems((current) => [...current, item]);
+        persistQuickLaunchData(quickLaunchGroups, [...quickLaunchItems, item]);
 
         invoke<string>("extract_program_icon", { path: filePath })
           .then((icon) => {
-            setQuickLaunchItems((current) =>
-              current.map((currentItem) =>
+            const nextItems = normalizeQuickLaunchItems(
+              quickLaunchItems.map((currentItem) =>
                 currentItem.id === id ? { ...currentItem, icon } : currentItem,
               ),
             );
+            persistQuickLaunchData(quickLaunchGroups, nextItems);
           })
           .catch(() => {});
       }
@@ -165,7 +175,10 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
 
   const removeQuickLaunchItem = (id: string, event: MouseEvent) => {
     event.stopPropagation();
-    setQuickLaunchItems((current) => current.filter((item) => item.id !== id));
+    persistQuickLaunchData(
+      quickLaunchGroups,
+      quickLaunchItems.filter((item) => item.id !== id),
+    );
     if (editDraft?.id === id) {
       setEditDraft(null);
     }
@@ -189,8 +202,9 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
   const saveItemDraft = () => {
     if (!editDraft) return;
 
-    setQuickLaunchItems((current) =>
-      current.map((item) =>
+    persistQuickLaunchData(
+      quickLaunchGroups,
+      quickLaunchItems.map((item) =>
         item.id === editDraft.id
           ? {
               ...item,
@@ -204,8 +218,9 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
   };
 
   const launchProgram = async (item: QuickLaunchItem) => {
-    setQuickLaunchItems((current) =>
-      current.map((entry) =>
+    persistQuickLaunchData(
+      quickLaunchGroups,
+      quickLaunchItems.map((entry) =>
         entry.id === item.id
           ? {
               ...entry,

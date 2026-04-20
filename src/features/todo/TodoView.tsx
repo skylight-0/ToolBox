@@ -1,6 +1,8 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import type { KeyboardEvent, MouseEvent } from "react";
 import SubViewHeader from "../../components/SubViewHeader";
+import { notifyToolboxDataChanged } from "../../utils/dataSync";
 
 type TodoViewProps = {
   onBack: () => void;
@@ -13,35 +15,37 @@ type TodoItem = {
 };
 
 function TodoView({ onBack }: TodoViewProps) {
-  const [todos, setTodos] = useState<TodoItem[]>(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_todos");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [todos, setTodos] = useState<TodoItem[]>([]);
   const [todoInput, setTodoInput] = useState("");
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
   const [editingTodoText, setEditingTodoText] = useState("");
 
   useEffect(() => {
-    localStorage.setItem("toolbox_todos", JSON.stringify(todos));
-  }, [todos]);
+    invoke<TodoItem[]>("get_todos")
+      .then(setTodos)
+      .catch(console.error);
+  }, []);
+
+  const persistTodos = (nextTodos: TodoItem[]) => {
+    setTodos(nextTodos);
+    void invoke("save_todos", { todos: nextTodos })
+      .then(() => notifyToolboxDataChanged("todos"))
+      .catch(console.error);
+  };
 
   const addTodo = () => {
     if (!todoInput.trim()) return;
-    setTodos((current) => [
+    persistTodos([
       { id: Date.now().toString(), text: todoInput.trim(), completed: false },
-      ...current,
+      ...todos,
     ]);
     setTodoInput("");
   };
 
   const toggleTodo = (id: string) => {
     if (editingTodoId === id) return;
-    setTodos((current) =>
-      current.map((item) =>
+    persistTodos(
+      todos.map((item) =>
         item.id === id ? { ...item, completed: !item.completed } : item,
       ),
     );
@@ -49,7 +53,7 @@ function TodoView({ onBack }: TodoViewProps) {
 
   const deleteTodo = (id: string, event: MouseEvent) => {
     event.stopPropagation();
-    setTodos((current) => current.filter((item) => item.id !== id));
+    persistTodos(todos.filter((item) => item.id !== id));
   };
 
   const startEditTodo = (id: string, text: string, event: MouseEvent) => {
@@ -60,8 +64,8 @@ function TodoView({ onBack }: TodoViewProps) {
 
   const saveEditTodo = () => {
     if (editingTodoId && editingTodoText.trim()) {
-      setTodos((current) =>
-        current.map((item) =>
+      persistTodos(
+        todos.map((item) =>
           item.id === editingTodoId ? { ...item, text: editingTodoText.trim() } : item,
         ),
       );

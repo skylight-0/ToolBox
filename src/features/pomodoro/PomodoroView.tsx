@@ -1,27 +1,15 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import SubViewHeader from "../../components/SubViewHeader";
+import { notifyToolboxDataChanged } from "../../utils/dataSync";
 
 type PomodoroViewProps = {
   onBack: () => void;
 };
 
 function PomodoroView({ onBack }: PomodoroViewProps) {
-  const [focusDuration, setFocusDuration] = useState(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_pomodoro_focus");
-      return saved ? parseInt(saved, 10) : 25;
-    } catch {
-      return 25;
-    }
-  });
-  const [breakDuration, setBreakDuration] = useState(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_pomodoro_break");
-      return saved ? parseInt(saved, 10) : 5;
-    } catch {
-      return 5;
-    }
-  });
+  const [focusDuration, setFocusDuration] = useState(25);
+  const [breakDuration, setBreakDuration] = useState(5);
   const [timeLeft, setTimeLeft] = useState(focusDuration * 60);
   const [isTimerActive, setIsTimerActive] = useState(false);
   const [isBreak, setIsBreak] = useState(false);
@@ -30,12 +18,21 @@ function PomodoroView({ onBack }: PomodoroViewProps) {
   const [tempBreakDuration, setTempBreakDuration] = useState(breakDuration.toString());
 
   useEffect(() => {
-    localStorage.setItem("toolbox_pomodoro_focus", focusDuration.toString());
-  }, [focusDuration]);
-
-  useEffect(() => {
-    localStorage.setItem("toolbox_pomodoro_break", breakDuration.toString());
-  }, [breakDuration]);
+    Promise.all([
+      invoke<string | null>("get_setting", { key: "pomodoro_focus" }),
+      invoke<string | null>("get_setting", { key: "pomodoro_break" }),
+    ])
+      .then(([focus, breakTime]) => {
+        const nextFocus = focus ? parseInt(focus, 10) : 25;
+        const nextBreak = breakTime ? parseInt(breakTime, 10) : 5;
+        setFocusDuration(Number.isFinite(nextFocus) ? nextFocus : 25);
+        setBreakDuration(Number.isFinite(nextBreak) ? nextBreak : 5);
+        setTempFocusDuration((Number.isFinite(nextFocus) ? nextFocus : 25).toString());
+        setTempBreakDuration((Number.isFinite(nextBreak) ? nextBreak : 5).toString());
+        setTimeLeft((Number.isFinite(nextFocus) ? nextFocus : 25) * 60);
+      })
+      .catch(console.error);
+  }, []);
 
   useEffect(() => {
     let interval: number | null = null;
@@ -109,12 +106,16 @@ function PomodoroView({ onBack }: PomodoroViewProps) {
     if (focus >= 1 && focus <= 120) {
       setFocusDuration(focus);
       if (!isBreak) setTimeLeft(focus * 60);
+      void invoke("set_setting", { key: "pomodoro_focus", value: focus.toString() }).catch(console.error);
     }
 
     if (breakValue >= 1 && breakValue <= 60) {
       setBreakDuration(breakValue);
       if (isBreak) setTimeLeft(breakValue * 60);
+      void invoke("set_setting", { key: "pomodoro_break", value: breakValue.toString() }).catch(console.error);
     }
+
+    notifyToolboxDataChanged("pomodoro");
 
     setShowSettings(false);
   };

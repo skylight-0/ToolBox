@@ -1,4 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
+import { notifyToolboxDataChanged } from "../../utils/dataSync";
 
 type TextManagerViewProps = {
   onBack: () => void;
@@ -42,22 +44,8 @@ function formatUpdatedAt(timestamp: number) {
 }
 
 function TextManagerView({ onBack }: TextManagerViewProps) {
-  const [groups, setGroups] = useState<TextGroup[]>(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_text_groups");
-      return saved ? JSON.parse(saved) : [DEFAULT_GROUP];
-    } catch {
-      return [DEFAULT_GROUP];
-    }
-  });
-  const [entries, setEntries] = useState<TextEntry[]>(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_text_entries");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [groups, setGroups] = useState<TextGroup[]>([DEFAULT_GROUP]);
+  const [entries, setEntries] = useState<TextEntry[]>([]);
   const [activeGroupId, setActiveGroupId] = useState("default");
   const [searchKeyword, setSearchKeyword] = useState("");
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
@@ -67,12 +55,23 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
   const [newGroupName, setNewGroupName] = useState("");
 
   useEffect(() => {
-    localStorage.setItem("toolbox_text_groups", JSON.stringify(groups));
-  }, [groups]);
+    invoke<{ groups: TextGroup[]; entries: TextEntry[] }>("get_text_manager_data")
+      .then((data) => {
+        setGroups(data.groups.length ? data.groups : [DEFAULT_GROUP]);
+        setEntries(data.entries);
+      })
+      .catch(console.error);
+  }, []);
 
-  useEffect(() => {
-    localStorage.setItem("toolbox_text_entries", JSON.stringify(entries));
-  }, [entries]);
+  const persistTextManagerData = (nextGroups: TextGroup[], nextEntries: TextEntry[]) => {
+    setGroups(nextGroups);
+    setEntries(nextEntries);
+    void invoke("save_text_manager_data", {
+      data: { groups: nextGroups, entries: nextEntries },
+    })
+      .then(() => notifyToolboxDataChanged("textmanager"))
+      .catch(console.error);
+  };
 
   const filteredEntries = useMemo(() => {
     const keyword = searchKeyword.trim().toLowerCase();
@@ -99,10 +98,11 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
 
   const saveEditGroup = (id: string) => {
     if (editingGroupName.trim()) {
-      setGroups((current) =>
-        current.map((group) =>
+      persistTextManagerData(
+        groups.map((group) =>
           group.id === id ? { ...group, name: editingGroupName.trim() } : group,
         ),
+        entries,
       );
     }
     setEditingGroupId(null);
@@ -112,7 +112,7 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
   const saveNewGroup = () => {
     if (newGroupName.trim()) {
       const id = Date.now().toString();
-      setGroups((current) => [...current, { id, name: newGroupName.trim() }]);
+      persistTextManagerData([...groups, { id, name: newGroupName.trim() }], entries);
       setActiveGroupId(id);
     }
     setIsAddingGroup(false);
@@ -120,12 +120,11 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
   };
 
   const deleteGroup = (groupId: string) => {
-    setEntries((current) =>
-      current.map((entry) =>
+    const nextEntries = entries.map((entry) =>
         entry.groupId === groupId ? { ...entry, groupId: "default", updatedAt: Date.now() } : entry,
-      ),
-    );
-    setGroups((current) => current.filter((group) => group.id !== groupId));
+      );
+    const nextGroups = groups.filter((group) => group.id !== groupId);
+    persistTextManagerData(nextGroups, nextEntries);
     if (activeGroupId === groupId) {
       setActiveGroupId("default");
     }
@@ -133,7 +132,7 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
 
   const addEntry = () => {
     const entry = createEntry(activeGroupId);
-    setEntries((current) => [entry, ...current]);
+    persistTextManagerData(groups, [entry, ...entries]);
     setSelectedEntryId(entry.id);
   };
 
@@ -141,15 +140,16 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
     entryId: string,
     patch: Partial<Pick<TextEntry, "title" | "content">>,
   ) => {
-    setEntries((current) =>
-      current.map((entry) =>
+    persistTextManagerData(
+      groups,
+      entries.map((entry) =>
         entry.id === entryId ? { ...entry, ...patch, updatedAt: Date.now() } : entry,
       ),
     );
   };
 
   const deleteEntry = (entryId: string) => {
-    setEntries((current) => current.filter((entry) => entry.id !== entryId));
+    persistTextManagerData(groups, entries.filter((entry) => entry.id !== entryId));
   };
 
   const copyEntry = async (entry: TextEntry) => {
