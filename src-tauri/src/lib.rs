@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use tauri::{
     LogicalPosition, LogicalSize, Manager, Monitor, Position, Size, State,
 };
-use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 
 mod platform;
 
@@ -224,11 +224,11 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
-                        let shortcut = shortcut.to_string();
-                        if shortcut == "Alt+Shift+Space" {
-                            toggle_sidebar_window(app);
-                        }
+                    if event.state == ShortcutState::Pressed
+                        && shortcut.matches(Modifiers::ALT | Modifiers::SHIFT, Code::Space)
+                    {
+                        eprintln!("全局快捷键 Alt+Shift+Space 已触发");
+                        toggle_sidebar_window(app);
                     }
                 })
                 .build(),
