@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, WheelEvent } from "react";
 import SubViewHeader from "../../components/SubViewHeader";
@@ -5,7 +6,7 @@ import {
   CLIPBOARD_STORAGE_KEY,
   type ClipboardGroup,
   type ClipboardItem,
-  filterDuplicateItems,
+  type ClipboardRecordInput,
   getClipboardSearchFields,
   normalizeClipboardItems,
 } from "./clipboardModel";
@@ -44,35 +45,53 @@ function stringifyTags(tags: string[]) {
   return tags.join(", ");
 }
 
+function normalizeTagInput(value: string) {
+  return value
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
 function isCodeSnippet(content: string) {
   return /```|;|\bconst\b|\blet\b|\bfunction\b|\bclass\b|<\/?[a-z][\s\S]*>/i.test(content);
 }
 
 function ClipboardView({ onBack }: ClipboardViewProps) {
-  const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(CLIPBOARD_STORAGE_KEY);
-      return saved ? normalizeClipboardItems(JSON.parse(saved)) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>([]);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [activeFilter, setActiveFilter] = useState<ClipboardFilter>("all");
   const [isMonitoring, setIsMonitoring] = useState(true);
   const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
+  const [editingTagsId, setEditingTagsId] = useState<string | null>(null);
+  const [tagDraft, setTagDraft] = useState("");
   const isDraggingPreview = useRef(false);
   const dragStartPreview = useRef({ x: 0, y: 0 });
   const lastClipboardContent = useRef<string>("");
 
+  const refreshClipboardHistory = async () => {
+    try {
+      const records = await invoke<ClipboardItem[]>("get_clipboard_history");
+      const normalized = normalizeClipboardItems(records);
+      setClipboardHistory(normalized);
+      localStorage.setItem(CLIPBOARD_STORAGE_KEY, JSON.stringify(normalized));
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   useEffect(() => {
-    localStorage.setItem(CLIPBOARD_STORAGE_KEY, JSON.stringify(clipboardHistory));
-  }, [clipboardHistory]);
+    void refreshClipboardHistory();
+  }, []);
 
   useEffect(() => {
     if (!isMonitoring) return;
+
+    const insertRecord = async (record: ClipboardRecordInput) => {
+      await invoke("insert_clipboard_record", { record });
+      await refreshClipboardHistory();
+    };
 
     const checkClipboard = async () => {
       try {
@@ -85,8 +104,8 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
 
         if (newText && newText !== lastClipboardContent.current) {
           lastClipboardContent.current = newText;
-          const newItem: ClipboardItem = {
-            id: Date.now().toString(),
+          await insertRecord({
+            id: crypto.randomUUID(),
             type: "text",
             content: newText.slice(0, 10000),
             timestamp: Date.now(),
@@ -94,23 +113,6 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
             pinned: false,
             tags: [],
             group: isCodeSnippet(newText) ? "snippet" : "general",
-          };
-
-          setClipboardHistory((current) => {
-            const duplicated = current.find(
-              (item) => item.type === "text" && item.content === newItem.content,
-            );
-            const filtered = filterDuplicateItems(current, newItem);
-            return normalizeClipboardItems([
-              {
-                ...newItem,
-                favorite: duplicated?.favorite || false,
-                pinned: duplicated?.pinned || false,
-                tags: duplicated?.tags || [],
-                group: duplicated?.group || newItem.group,
-              },
-              ...filtered,
-            ]).slice(0, 120);
           });
         }
 
@@ -135,8 +137,8 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
 
           if (imageContent !== lastClipboardContent.current) {
             lastClipboardContent.current = imageContent;
-            const newItem: ClipboardItem = {
-              id: Date.now().toString(),
+            await insertRecord({
+              id: crypto.randomUUID(),
               type: "image",
               content: imageContent,
               timestamp: Date.now(),
@@ -144,30 +146,15 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
               pinned: false,
               tags: [],
               group: "general",
-            };
-
-            setClipboardHistory((current) => {
-              const duplicated = current.find(
-                (item) => item.type === "image" && item.content === imageContent,
-              );
-              const filtered = filterDuplicateItems(current, newItem);
-              return normalizeClipboardItems([
-                {
-                  ...newItem,
-                  favorite: duplicated?.favorite || false,
-                  pinned: duplicated?.pinned || false,
-                  tags: duplicated?.tags || [],
-                  group: duplicated?.group || "general",
-                },
-                ...filtered,
-              ]).slice(0, 120);
             });
           }
         } catch {}
       } catch {}
     };
 
-    const interval = window.setInterval(checkClipboard, 800);
+    const interval = window.setInterval(() => {
+      void checkClipboard();
+    }, 800);
     return () => clearInterval(interval);
   }, [isMonitoring]);
 
@@ -199,6 +186,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
 
   const summary = useMemo(
     () => ({
+      total: clipboardHistory.length,
       pinned: clipboardHistory.filter((item) => item.pinned).length,
       favorites: clipboardHistory.filter((item) => item.favorite).length,
       snippets: clipboardHistory.filter((item) => item.group === "snippet").length,
@@ -207,10 +195,23 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     [clipboardHistory],
   );
 
-  const updateItem = (id: string, updater: (item: ClipboardItem) => ClipboardItem) => {
-    setClipboardHistory((current) =>
-      current.map((item) => (item.id === id ? updater(item) : item)),
-    );
+  const persistItemUpdate = async (
+    id: string,
+    changes: {
+      favorite?: boolean;
+      pinned?: boolean;
+      tags?: string[];
+      group?: ClipboardGroup;
+    },
+  ) => {
+    await invoke("update_clipboard_record", {
+      id,
+      favorite: changes.favorite,
+      pinned: changes.pinned,
+      tags: changes.tags,
+      group: changes.group,
+    });
+    await refreshClipboardHistory();
   };
 
   const copyToClipboard = async (item: ClipboardItem) => {
@@ -236,45 +237,57 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     } catch {}
   };
 
-  const toggleFavorite = (id: string, event: MouseEvent) => {
+  const toggleFavorite = async (item: ClipboardItem, event: MouseEvent) => {
     event.stopPropagation();
-    updateItem(id, (item) => ({ ...item, favorite: !item.favorite }));
+    await persistItemUpdate(item.id, { favorite: !item.favorite });
   };
 
-  const togglePinned = (id: string, event: MouseEvent) => {
+  const togglePinned = async (item: ClipboardItem, event: MouseEvent) => {
     event.stopPropagation();
-    updateItem(id, (item) => ({ ...item, pinned: !item.pinned }));
+    await persistItemUpdate(item.id, { pinned: !item.pinned });
   };
 
-  const toggleGroup = (id: string, event: MouseEvent, currentGroup: ClipboardGroup) => {
+  const toggleGroup = async (item: ClipboardItem, event: MouseEvent) => {
     event.stopPropagation();
-    updateItem(id, (item) => ({
-      ...item,
-      group: currentGroup === "snippet" ? "general" : "snippet",
-    }));
+    await persistItemUpdate(item.id, {
+      group: item.group === "snippet" ? "general" : "snippet",
+    });
   };
 
-  const editTags = (item: ClipboardItem, event: MouseEvent) => {
+  const openTagEditor = (item: ClipboardItem, event: MouseEvent) => {
     event.stopPropagation();
-    const nextTags = window.prompt("编辑标签，使用逗号分隔", stringifyTags(item.tags || []));
-    if (nextTags === null) return;
-
-    updateItem(item.id, (current) => ({
-      ...current,
-      tags: nextTags
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean),
-    }));
+    setEditingTagsId(item.id);
+    setTagDraft(stringifyTags(item.tags || []));
   };
 
-  const deleteClipboardItem = (id: string, event: MouseEvent) => {
-    event.stopPropagation();
-    setClipboardHistory((current) => current.filter((item) => item.id !== id));
+  const saveTags = async (id: string) => {
+    await persistItemUpdate(id, { tags: normalizeTagInput(tagDraft) });
+    setEditingTagsId(null);
+    setTagDraft("");
   };
 
-  const clearClipboardHistory = () => {
-    setClipboardHistory((current) => current.filter((item) => item.favorite || item.pinned));
+  const cancelTagEdit = () => {
+    setEditingTagsId(null);
+    setTagDraft("");
+  };
+
+  const deleteClipboardItem = async (id: string, event: MouseEvent) => {
+    event.stopPropagation();
+    try {
+      await invoke("delete_clipboard_record", { id });
+      await refreshClipboardHistory();
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const clearClipboardHistory = async () => {
+    try {
+      await invoke("clear_clipboard_records");
+      await refreshClipboardHistory();
+    } catch (error) {
+      console.error(error);
+    }
   };
 
   const closePreview = () => {
@@ -343,7 +356,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
         {isMonitoring ? "⏸️ 监控中" : "▶️ 已暂停"}
       </button>
       {clipboardHistory.some((item) => !item.favorite && !item.pinned) && (
-        <button className="clipboard-clear-btn" onClick={clearClipboardHistory} title="清空普通记录">
+        <button className="clipboard-clear-btn" onClick={() => void clearClipboardHistory()} title="清空普通记录">
           🗑️ 清空普通记录
         </button>
       )}
@@ -373,6 +386,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
             ))}
           </div>
           <div className="clipboard-stats-row">
+            <span className="clipboard-stat-chip">总数 {summary.total}</span>
             <span className="clipboard-stat-chip">置顶 {summary.pinned}</span>
             <span className="clipboard-stat-chip">收藏 {summary.favorites}</span>
             <span className="clipboard-stat-chip">代码片段 {summary.snippets}</span>
@@ -385,13 +399,17 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
             <div className="clipboard-empty-icon">📋</div>
             <div className="clipboard-empty-text">暂无匹配记录</div>
             <div className="clipboard-empty-hint">
-              复制文本或图片后将自动记录，现在支持全文搜索、标签、置顶和代码片段分组
+              剪贴板历史现已迁移到 SQLite，复制的每一条文本或图片都会单独保存
             </div>
           </div>
         ) : (
           <div className="clipboard-list">
             {visibleItems.map((item) => (
-              <div key={item.id} className={`clipboard-item ${item.pinned ? "pinned" : ""}`} onClick={() => copyToClipboard(item)}>
+              <div
+                key={item.id}
+                className={`clipboard-item ${item.pinned ? "pinned" : ""}`}
+                onClick={() => void copyToClipboard(item)}
+              >
                 <div className="clipboard-item-content">
                   {item.type === "text" ? (
                     <div className={`clipboard-text-preview ${item.group === "snippet" ? "snippet" : ""}`}>
@@ -430,7 +448,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
                     {item.type === "text" && (
                       <button
                         className="clipboard-action-btn"
-                        onClick={(event) => copyAsPlainText(item, event)}
+                        onClick={(event) => void copyAsPlainText(item, event)}
                         title="复制纯文本"
                       >
                         纯文本
@@ -439,7 +457,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
                     {item.type === "text" && (
                       <button
                         className={`clipboard-action-btn ${item.group === "snippet" ? "active" : ""}`}
-                        onClick={(event) => toggleGroup(item.id, event, item.group || "general")}
+                        onClick={(event) => void toggleGroup(item, event)}
                         title={item.group === "snippet" ? "移出代码片段" : "标记为代码片段"}
                       >
                         {item.group === "snippet" ? "普通" : "代码"}
@@ -447,34 +465,50 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
                     )}
                     <button
                       className={`clipboard-action-btn ${item.pinned ? "active" : ""}`}
-                      onClick={(event) => togglePinned(item.id, event)}
+                      onClick={(event) => void togglePinned(item, event)}
                       title={item.pinned ? "取消置顶" : "置顶"}
                     >
                       📌
                     </button>
                     <button
                       className={`clipboard-action-btn ${item.favorite ? "active" : ""}`}
-                      onClick={(event) => toggleFavorite(item.id, event)}
+                      onClick={(event) => void toggleFavorite(item, event)}
                       title={item.favorite ? "取消收藏" : "收藏"}
                     >
                       ★
                     </button>
                     <button
                       className="clipboard-action-btn"
-                      onClick={(event) => editTags(item, event)}
+                      onClick={(event) => openTagEditor(item, event)}
                       title="编辑标签"
                     >
                       标签
                     </button>
                     <button
                       className="clipboard-delete-btn"
-                      onClick={(event) => deleteClipboardItem(item.id, event)}
+                      onClick={(event) => void deleteClipboardItem(item.id, event)}
                       title="删除"
                     >
                       ×
                     </button>
                   </div>
                 </div>
+                {editingTagsId === item.id && (
+                  <div className="clipboard-tag-editor" onClick={(event) => event.stopPropagation()}>
+                    <input
+                      className="clipboard-tag-input"
+                      value={tagDraft}
+                      onChange={(event) => setTagDraft(event.target.value)}
+                      placeholder="输入标签，逗号分隔"
+                    />
+                    <button className="clipboard-tag-save" onClick={() => void saveTags(item.id)}>
+                      保存
+                    </button>
+                    <button className="clipboard-tag-cancel" onClick={cancelTagEdit}>
+                      取消
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -531,7 +565,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
               />
             </div>
             <div className="clipboard-preview-footer">
-              <button className="clipboard-preview-copy" onClick={() => copyToClipboard(previewItem)}>
+              <button className="clipboard-preview-copy" onClick={() => void copyToClipboard(previewItem)}>
                 复制图片
               </button>
             </div>

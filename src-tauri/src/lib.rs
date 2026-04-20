@@ -1,5 +1,8 @@
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Mutex;
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use tauri::{
     LogicalPosition, LogicalSize, Manager, Monitor, Position, Size, State,
 };
@@ -10,6 +13,33 @@ mod platform;
 pub(crate) struct AppState {
     sidebar_width: Mutex<u32>,
     sidebar_is_closing: Mutex<bool>,
+    clipboard_db_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClipboardRecord {
+    id: String,
+    #[serde(rename = "type")]
+    record_type: String,
+    content: String,
+    timestamp: i64,
+    favorite: bool,
+    pinned: bool,
+    tags: Vec<String>,
+    group: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClipboardRecordInput {
+    id: String,
+    #[serde(rename = "type")]
+    record_type: String,
+    content: String,
+    timestamp: i64,
+    favorite: Option<bool>,
+    pinned: Option<bool>,
+    tags: Option<Vec<String>>,
+    group: Option<String>,
 }
 
 // 获取屏幕尺寸并定位窗口到右侧
@@ -111,6 +141,69 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
+fn open_clipboard_db(state: &State<'_, AppState>) -> Result<Connection, String> {
+    Connection::open(&state.clipboard_db_path)
+        .map_err(|error| format!("打开剪贴板数据库失败: {}", error))
+}
+
+fn init_clipboard_db(path: &PathBuf) -> Result<(), String> {
+    let connection = Connection::open(path)
+        .map_err(|error| format!("初始化剪贴板数据库失败: {}", error))?;
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS clipboard_history (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                favorite INTEGER NOT NULL DEFAULT 0,
+                pinned INTEGER NOT NULL DEFAULT 0,
+                tags TEXT NOT NULL DEFAULT '[]',
+                group_name TEXT NOT NULL DEFAULT 'general'
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_clipboard_history_timestamp
+            ON clipboard_history(timestamp DESC);
+            ",
+        )
+        .map_err(|error| format!("创建剪贴板数据表失败: {}", error))?;
+    Ok(())
+}
+
+fn normalize_group_name(group: Option<String>) -> String {
+    match group.as_deref() {
+        Some("snippet") => "snippet".to_string(),
+        _ => "general".to_string(),
+    }
+}
+
+fn normalize_tags(tags: Option<Vec<String>>) -> Vec<String> {
+    let mut normalized = Vec::<String>::new();
+    for tag in tags.unwrap_or_default() {
+        let tag = tag.trim().to_lowercase();
+        if !tag.is_empty() && !normalized.contains(&tag) {
+            normalized.push(tag);
+        }
+    }
+    normalized
+}
+
+fn read_clipboard_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardRecord> {
+    let tags_json: String = row.get("tags")?;
+    let tags = serde_json::from_str::<Vec<String>>(&tags_json).unwrap_or_default();
+    Ok(ClipboardRecord {
+        id: row.get("id")?,
+        record_type: row.get("type")?,
+        content: row.get("content")?,
+        timestamp: row.get("timestamp")?,
+        favorite: row.get::<_, i64>("favorite")? != 0,
+        pinned: row.get::<_, i64>("pinned")? != 0,
+        tags,
+        group: row.get("group_name")?,
+    })
+}
+
 #[tauri::command]
 fn save_image_data(path: String, data_url: String) -> Result<(), String> {
     let bytes = decode_data_url(&data_url)?;
@@ -130,6 +223,119 @@ fn launch_program(window: tauri::WebviewWindow, path: String) -> Result<(), Stri
 #[tauri::command]
 async fn extract_program_icon(path: String) -> Result<String, String> {
     platform::extract_program_icon(path).await
+}
+
+#[tauri::command]
+fn get_clipboard_history(state: State<'_, AppState>) -> Result<Vec<ClipboardRecord>, String> {
+    let connection = open_clipboard_db(&state)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, type, content, timestamp, favorite, pinned, tags, group_name
+             FROM clipboard_history
+             ORDER BY pinned DESC, favorite DESC, timestamp DESC",
+        )
+        .map_err(|error| format!("读取剪贴板记录失败: {}", error))?;
+
+    let rows = statement
+        .query_map([], read_clipboard_record)
+        .map_err(|error| format!("查询剪贴板记录失败: {}", error))?;
+
+    rows.into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析剪贴板记录失败: {}", error))
+}
+
+#[tauri::command]
+fn insert_clipboard_record(
+    state: State<'_, AppState>,
+    record: ClipboardRecordInput,
+) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    let tags = normalize_tags(record.tags);
+    connection
+        .execute(
+            "INSERT INTO clipboard_history (id, type, content, timestamp, favorite, pinned, tags, group_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                record.id,
+                record.record_type,
+                record.content,
+                record.timestamp,
+                i64::from(record.favorite.unwrap_or(false)),
+                i64::from(record.pinned.unwrap_or(false)),
+                serde_json::to_string(&tags).map_err(|error| format!("序列化标签失败: {}", error))?,
+                normalize_group_name(record.group),
+            ],
+        )
+        .map_err(|error| format!("保存剪贴板记录失败: {}", error))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_clipboard_record(
+    state: State<'_, AppState>,
+    id: String,
+    favorite: Option<bool>,
+    pinned: Option<bool>,
+    tags: Option<Vec<String>>,
+    group: Option<String>,
+) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    let current = connection
+        .query_row(
+            "SELECT id, type, content, timestamp, favorite, pinned, tags, group_name
+             FROM clipboard_history
+             WHERE id = ?1",
+            params![id],
+            read_clipboard_record,
+        )
+        .map_err(|error| format!("读取待更新剪贴板记录失败: {}", error))?;
+
+    let next_favorite = favorite.unwrap_or(current.favorite);
+    let next_pinned = pinned.unwrap_or(current.pinned);
+    let next_tags = if tags.is_some() {
+        normalize_tags(tags)
+    } else {
+        current.tags
+    };
+    let next_group = group.unwrap_or(current.group);
+
+    connection
+        .execute(
+            "UPDATE clipboard_history
+             SET favorite = ?2, pinned = ?3, tags = ?4, group_name = ?5
+             WHERE id = ?1",
+            params![
+                current.id,
+                i64::from(next_favorite),
+                i64::from(next_pinned),
+                serde_json::to_string(&next_tags).map_err(|error| format!("序列化标签失败: {}", error))?,
+                normalize_group_name(Some(next_group)),
+            ],
+        )
+        .map_err(|error| format!("更新剪贴板记录失败: {}", error))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_clipboard_record(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    connection
+        .execute("DELETE FROM clipboard_history WHERE id = ?1", params![id])
+        .map_err(|error| format!("删除剪贴板记录失败: {}", error))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_clipboard_records(state: State<'_, AppState>) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    connection
+        .execute(
+            "DELETE FROM clipboard_history WHERE favorite = 0 AND pinned = 0",
+            [],
+        )
+        .map_err(|error| format!("清空剪贴板记录失败: {}", error))?;
+    Ok(())
 }
 
 // 供前端或底部托盘和快捷键统一调用的侧边栏切换逻辑
@@ -241,13 +447,28 @@ pub fn run() {
             toggle_taskbar,
             launch_program,
             extract_program_icon,
-            save_image_data
+            save_image_data,
+            get_clipboard_history,
+            insert_clipboard_record,
+            update_clipboard_record,
+            delete_clipboard_record,
+            clear_clipboard_records
         ])
         .setup(|app| {
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("读取应用数据目录失败: {}", error))?;
+            fs::create_dir_all(&app_data_dir)
+                .map_err(|error| format!("创建应用数据目录失败: {}", error))?;
+            let clipboard_db_path = app_data_dir.join("clipboard.sqlite");
+            init_clipboard_db(&clipboard_db_path)?;
+
             // 初始化状态管理器
             app.manage(AppState {
                 sidebar_width: Mutex::new(400),
                 sidebar_is_closing: Mutex::new(false),
+                clipboard_db_path,
             });
 
             // 注册 Alt+Space 全局快捷键

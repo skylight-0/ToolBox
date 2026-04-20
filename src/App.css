@@ -2404,6 +2404,48 @@ body,
   background: rgba(255, 255, 255, 0.05);
 }
 
+.clipboard-tag-editor {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.clipboard-tag-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.clipboard-tag-input:focus {
+  border-color: var(--accent-color);
+}
+
+.clipboard-tag-save,
+.clipboard-tag-cancel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.clipboard-tag-save {
+  background: rgba(96, 205, 255, 0.16);
+  color: var(--text-primary);
+}
+
+.clipboard-tag-cancel {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+}
+
 .clipboard-item-actions {
   display: flex;
   align-items: center;

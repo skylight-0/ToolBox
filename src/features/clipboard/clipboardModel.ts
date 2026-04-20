@@ -13,6 +13,17 @@ export type ClipboardItem = {
 
 export const CLIPBOARD_STORAGE_KEY = "toolbox_clipboard_history";
 
+export type ClipboardRecordInput = {
+  id: string;
+  type: "text" | "image";
+  content: string;
+  timestamp: number;
+  favorite?: boolean;
+  pinned?: boolean;
+  tags?: string[];
+  group?: ClipboardGroup;
+};
+
 function normalizeTags(tags: string[] | undefined) {
   if (!Array.isArray(tags)) return [];
   return Array.from(
@@ -37,12 +48,6 @@ export function normalizeClipboardItem(item: ClipboardItem): ClipboardItem {
 
 export function normalizeClipboardItems(items: ClipboardItem[]) {
   return items.map(normalizeClipboardItem);
-}
-
-export function filterDuplicateItems(items: ClipboardItem[], candidate: ClipboardItem) {
-  return items.filter(
-    (item) => !(item.type === candidate.type && item.content === candidate.content),
-  );
 }
 
 export function getClipboardSearchFields(item: ClipboardItem) {
