@@ -225,9 +225,9 @@ pub fn run() {
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
                     if event.state == ShortcutState::Pressed
-                        && shortcut.matches(Modifiers::ALT | Modifiers::SHIFT, Code::Space)
+                        && shortcut.matches(Modifiers::ALT, Code::Space)
                     {
-                        eprintln!("全局快捷键 Alt+Shift+Space 已触发");
+                        eprintln!("全局快捷键 Alt+Space 已触发");
                         toggle_sidebar_window(app);
                     }
                 })
@@ -250,10 +250,10 @@ pub fn run() {
                 sidebar_is_closing: Mutex::new(false),
             });
 
-            // 注册 Alt+Shift+Space 全局快捷键
+            // 注册 Alt+Space 全局快捷键
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
-            if let Err(error) = app.global_shortcut().register("Alt+Shift+Space") {
-                eprintln!("注册全局快捷键 Alt+Shift+Space 失败: {}", error);
+            if let Err(error) = app.global_shortcut().register("Alt+Space") {
+                eprintln!("注册全局快捷键 Alt+Space 失败: {}", error);
             }
 
             // 初始隐藏窗口
