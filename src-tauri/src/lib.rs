@@ -536,6 +536,7 @@ pub fn run() {
                     remove_pinned_image(&state, label);
                 }
             }
+            _ => {}
         })
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
