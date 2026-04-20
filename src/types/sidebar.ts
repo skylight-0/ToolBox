@@ -5,7 +5,6 @@ export type ActiveView =
   | "clipboard"
   | "quicklaunch"
   | "textmanager"
-  | "screenshot"
   | "pomodoro";
 
 export type ViewToolId = Exclude<ActiveView, "main">;
@@ -22,10 +21,6 @@ export type ToolItem =
   | (ToolBase & {
       kind: "view";
       view: ViewToolId;
-    })
-  | (ToolBase & {
-      kind: "capture";
-      view: "screenshot";
     });
 
 export type ToggleSwitchItem = {

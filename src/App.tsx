@@ -10,7 +10,6 @@ import ClipboardView from "./features/clipboard/ClipboardView";
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
-import ScreenshotEditorView from "./features/screenshot/ScreenshotEditorView";
 import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
 import type { ActiveView, ToggleSwitchItem, ToolId, ViewToolId } from "./types/sidebar";
@@ -131,7 +130,6 @@ function App() {
   const [commandQuery, setCommandQuery] = useState("");
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
-  const [screenshotRefreshToken, setScreenshotRefreshToken] = useState(0);
   const [switchStates, setSwitchStates] = useState<Record<ToggleSwitchItem["id"], boolean>>({
     desktop: true,
     taskbar: true,
@@ -181,16 +179,11 @@ function App() {
 
     const unlistenHide = listen("hide-sidebar", triggerHide);
     const unlistenBlur = listen("tauri://blur", triggerHide);
-    const unlistenScreenshot = listen("open-screenshot-editor", () => {
-      setActiveView("screenshot");
-      setScreenshotRefreshToken((current) => current + 1);
-    });
 
     return () => {
       unlistenShow.then((fn) => fn());
       unlistenHide.then((fn) => fn());
       unlistenBlur.then((fn) => fn());
-      unlistenScreenshot.then((fn) => fn());
       if (hideTimeoutId !== null) window.clearTimeout(hideTimeoutId);
     };
   }, []);
@@ -259,7 +252,7 @@ function App() {
           .filter((item) => (item.launchCount || 0) > 0)
           .sort((left, right) => (right.lastLaunchedAt || 0) - (left.lastLaunchedAt || 0))
           .slice(0, 4)
-          .map((item, index) => ({
+          .map<SearchResult>((item, index) => ({
             id: `suggest-quicklaunch-${item.id}`,
             icon: item.icon ? "📌" : "📄",
             title: item.alias ? `${item.alias} · ${item.name}` : item.name,
@@ -276,7 +269,7 @@ function App() {
           .filter((item) => item.type === "text" && item.favorite)
           .sort((left, right) => right.timestamp - left.timestamp)
           .slice(0, 3)
-          .map((item, index) => ({
+          .map<SearchResult>((item, index) => ({
             id: `suggest-clipboard-${item.id}`,
             icon: "⭐",
             title: shortenText(item.content, 32) || "收藏文本",
@@ -288,7 +281,7 @@ function App() {
             secondaryAction: { type: "open-view", view: "clipboard" },
             score: 80 - index,
           })),
-        ...TOOLS.slice(0, 4).map((tool, index) => ({
+        ...TOOLS.slice(0, 4).map<SearchResult>((tool, index) => ({
           id: `suggest-tool-${tool.id}`,
           icon: tool.icon,
           title: tool.label,
@@ -453,18 +446,7 @@ function App() {
     const tool = TOOLS.find((item) => item.id === toolId);
     if (!tool) return;
 
-    if (tool.kind === "view") {
-      setActiveView(tool.view);
-      return;
-    }
-
-    if (tool.kind === "capture") {
-      try {
-        await invoke("capture_screenshot");
-      } catch (error) {
-        console.error(error);
-      }
-    }
+    setActiveView(tool.view);
   };
 
   const handleCommandResultClick = async (result: CommandPaletteResult) => {
@@ -622,13 +604,6 @@ function App() {
     json: <JsonToolView onBack={() => setActiveView("main")} />,
     todo: <TodoView onBack={() => setActiveView("main")} />,
     clipboard: <ClipboardView onBack={() => setActiveView("main")} />,
-    screenshot: (
-      <ScreenshotEditorView
-        onBack={() => setActiveView("main")}
-        refreshToken={screenshotRefreshToken}
-        isDialogOpenRef={isDialogOpenRef}
-      />
-    ),
     textmanager: <TextManagerView onBack={() => setActiveView("main")} />,
     quicklaunch: (
       <QuickLaunchView
