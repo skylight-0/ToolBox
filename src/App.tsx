@@ -146,14 +146,33 @@ function App() {
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
+  const previewWidthRef = useRef<number | null>(null);
   const isDialogOpenRef = useRef(false);
+
+  const finishDragging = (commitWidth: boolean) => {
+    if (!isDragging.current) return;
+
+    isDragging.current = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+
+    const finalWidth = previewWidthRef.current;
+    if (commitWidth && finalWidth !== null) {
+      const width = Math.round(finalWidth);
+      setSidebarWidth(width);
+      void invoke("resize_sidebar", { width });
+    }
+
+    previewWidthRef.current = null;
+    setPreviewWidth(null);
+  };
 
   useEffect(() => {
     let isCurrentlyClosing = false;
     let hideTimeoutId: number | null = null;
 
     const triggerHide = () => {
-      if (isCurrentlyClosing || isDialogOpenRef.current) return;
+      if (isCurrentlyClosing || isDialogOpenRef.current || isDragging.current) return;
       isCurrentlyClosing = true;
       setIsClosing(true);
 
@@ -178,7 +197,10 @@ function App() {
     });
 
     const unlistenHide = listen("hide-sidebar", triggerHide);
-    const unlistenBlur = listen("tauri://blur", triggerHide);
+    const unlistenBlur = listen("tauri://blur", () => {
+      finishDragging(true);
+      triggerHide();
+    });
 
     return () => {
       unlistenShow.then((fn) => fn());
@@ -193,24 +215,12 @@ function App() {
       if (!isDragging.current) return;
       const delta = dragStartX.current - event.screenX;
       const newWidth = Math.max(280, Math.min(1200, dragStartWidth.current + delta));
+      previewWidthRef.current = newWidth;
       setPreviewWidth(newWidth);
     };
 
     const handleMouseUp = () => {
-      if (!isDragging.current) return;
-
-      isDragging.current = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-
-      setPreviewWidth((finalWidth) => {
-        if (finalWidth !== null) {
-          const width = Math.round(finalWidth);
-          setSidebarWidth(width);
-          invoke("resize_sidebar", { width });
-        }
-        return null;
-      });
+      finishDragging(true);
     };
 
     document.addEventListener("mousemove", handleMouseMove);
@@ -218,6 +228,7 @@ function App() {
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
+      finishDragging(false);
     };
   }, []);
 
@@ -437,6 +448,7 @@ function App() {
     isDragging.current = true;
     dragStartX.current = event.screenX;
     dragStartWidth.current = sidebarWidth;
+    previewWidthRef.current = sidebarWidth;
     document.body.style.cursor = "ew-resize";
     document.body.style.userSelect = "none";
     event.preventDefault();

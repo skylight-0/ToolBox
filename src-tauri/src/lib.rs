@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::Mutex;
 use tauri::{
-    LogicalPosition, LogicalSize, Manager, Position, Size, State,
+    LogicalPosition, LogicalSize, Manager, Monitor, Position, Size, State,
 };
 use tauri_plugin_global_shortcut::ShortcutState;
 
@@ -9,11 +9,22 @@ mod platform;
 
 pub(crate) struct AppState {
     sidebar_width: Mutex<u32>,
+    sidebar_is_closing: Mutex<bool>,
 }
 
 // 获取屏幕尺寸并定位窗口到右侧
+fn resolve_target_monitor(window: &tauri::WebviewWindow) -> Option<Monitor> {
+    if let Ok(cursor) = window.cursor_position() {
+        if let Ok(Some(monitor)) = window.monitor_from_point(cursor.x, cursor.y) {
+            return Some(monitor);
+        }
+    }
+
+    window.current_monitor().ok().flatten()
+}
+
 fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
-    if let Ok(Some(monitor)) = window.current_monitor() {
+    if let Some(monitor) = resolve_target_monitor(window) {
         let scale_factor = monitor.scale_factor();
         let screen_size = monitor.size().to_logical::<f64>(scale_factor);
         let screen_pos = monitor.position().to_logical::<f64>(scale_factor);
@@ -21,7 +32,7 @@ fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
         let screen_height = screen_size.height;
         let screen_width = screen_size.width;
 
-        // 窗口定位到屏幕右侧 (前端传来的 width 是逻辑/CSS像素)
+        // 窗口定位到鼠标所在屏幕右侧 (前端传来的 width 是逻辑/CSS像素)
         let logical_width = width as f64;
         let x = screen_pos.x + (screen_width - logical_width);
         let y = screen_pos.y;
@@ -35,6 +46,12 @@ fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
 }
 
 use tauri::Emitter;
+
+fn mark_sidebar_closing(state: &State<'_, AppState>, is_closing: bool) {
+    if let Ok(mut closing) = state.sidebar_is_closing.lock() {
+        *closing = is_closing;
+    }
+}
 
 // 切换桌面图标的隐藏/显示
 #[tauri::command]
@@ -103,7 +120,10 @@ fn save_image_data(path: String, data_url: String) -> Result<(), String> {
 // 启动指定路径的程序（快捷访问功能）
 #[tauri::command]
 fn launch_program(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
-    platform::launch_program(window, path)
+    platform::launch_program(window.clone(), path)?;
+    let state: State<'_, AppState> = window.state();
+    request_hide_sidebar(&window, &state);
+    Ok(())
 }
 
 // 提取程序图标为 base64 PNG 数据（通过 PowerShell 调用 .NET 的 System.Drawing）
@@ -113,18 +133,43 @@ async fn extract_program_icon(path: String) -> Result<String, String> {
 }
 
 // 供前端或底部托盘和快捷键统一调用的侧边栏切换逻辑
+fn show_sidebar_window(app_handle: &tauri::AppHandle, state: &State<'_, AppState>) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let width = state.sidebar_width.lock().ok().map(|value| *value).unwrap_or(400);
+        mark_sidebar_closing(state, false);
+        position_window_right(&window, width);
+        let _ = window.emit("show-sidebar", ());
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn request_hide_sidebar<R: tauri::Runtime>(
+    window: &impl tauri::Emitter<R>,
+    state: &State<'_, AppState>,
+) {
+    mark_sidebar_closing(state, true);
+    let _ = window.emit("hide-sidebar", ());
+}
+
 fn toggle_sidebar_window(app_handle: &tauri::AppHandle) {
     if let Some(window) = app_handle.get_webview_window("main") {
+        let state: State<'_, AppState> = app_handle.state();
         if let Ok(visible) = window.is_visible() {
             if visible {
-                let _ = window.emit("hide-sidebar", ());
+                let is_closing = state
+                    .sidebar_is_closing
+                    .lock()
+                    .ok()
+                    .map(|value| *value)
+                    .unwrap_or(false);
+                if is_closing {
+                    show_sidebar_window(app_handle, &state);
+                } else {
+                    request_hide_sidebar(&window, &state);
+                }
             } else {
-                let state: State<'_, AppState> = app_handle.state();
-                let width = *state.sidebar_width.lock().unwrap();
-                position_window_right(&window, width);
-                let _ = window.emit("show-sidebar", ());
-                let _ = window.show();
-                let _ = window.set_focus();
+                show_sidebar_window(app_handle, &state);
             }
         }
     }
@@ -138,7 +183,8 @@ fn toggle_sidebar(app: tauri::AppHandle) {
 
 // 供前端在滑出动画结束后实际隐藏窗口的命令
 #[tauri::command]
-fn do_hide_sidebar(window: tauri::WebviewWindow) {
+fn do_hide_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>) {
+    mark_sidebar_closing(&state, false);
     let _ = window.hide();
 }
 
@@ -168,8 +214,9 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             // 在底层直接监听系统窗口级别的失焦事件
             tauri::WindowEvent::Focused(focused) => {
-                if !focused {
-                    let _ = window.emit("hide-sidebar", ());
+                if !focused && window.label() == "main" {
+                    let state: State<'_, AppState> = window.state();
+                    request_hide_sidebar(window, &state);
                 }
             }
             _ => {}
@@ -200,6 +247,7 @@ pub fn run() {
             // 初始化状态管理器
             app.manage(AppState {
                 sidebar_width: Mutex::new(400),
+                sidebar_is_closing: Mutex::new(false),
             });
 
             // 注册 Alt+Space 全局快捷键

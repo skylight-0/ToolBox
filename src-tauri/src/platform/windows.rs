@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use tauri::{Emitter, WebviewWindow};
+use tauri::WebviewWindow;
 use windows::{
     core::{w, PCWSTR},
     Win32::{
@@ -99,7 +99,7 @@ fn run_hidden_powershell(script: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn launch_program(window: WebviewWindow, path: String) -> Result<(), String> {
+pub fn launch_program(_window: WebviewWindow, path: String) -> Result<(), String> {
     let mut cmd = Command::new("cmd");
     cmd.args(["/c", "start", "", &path]);
 
@@ -108,7 +108,6 @@ pub fn launch_program(window: WebviewWindow, path: String) -> Result<(), String>
     cmd.creation_flags(CREATE_NO_WINDOW);
 
     cmd.spawn().map_err(|e| format!("启动程序失败: {}", e))?;
-    let _ = window.emit("hide-sidebar", ());
     Ok(())
 }
 
