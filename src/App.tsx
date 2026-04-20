@@ -7,6 +7,7 @@ import MainSidebarView from "./components/MainSidebarView";
 import type { CommandPaletteResult } from "./components/MainSidebarView";
 import { TOOLS } from "./constants/sidebar";
 import ClipboardView from "./features/clipboard/ClipboardView";
+import { CLIPBOARD_STORAGE_KEY, getClipboardSearchFields, type ClipboardItem as ClipboardSearchItem, normalizeClipboardItems } from "./features/clipboard/clipboardModel";
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
@@ -29,14 +30,6 @@ type SearchResult = CommandPaletteResult & {
   payload: SearchResultPayload;
   secondaryAction: SecondaryAction;
   score: number;
-};
-
-type ClipboardSearchItem = {
-  id: string;
-  type: "text" | "image";
-  content: string;
-  timestamp: number;
-  favorite?: boolean;
 };
 
 type QuickLaunchSearchItem = {
@@ -253,7 +246,7 @@ function App() {
   const commandResults = useMemo<SearchResult[]>(() => {
     const query = commandQuery.trim().toLowerCase();
     const quickLaunchItems = loadStoredArray<QuickLaunchSearchItem>("toolbox_quicklaunch");
-    const clipboardItems = loadStoredArray<ClipboardSearchItem>("toolbox_clipboard_history");
+    const clipboardItems = normalizeClipboardItems(loadStoredArray<ClipboardSearchItem>(CLIPBOARD_STORAGE_KEY));
     const textEntries = loadStoredArray<TextEntrySearchItem>("toolbox_text_entries");
     const todoItems = loadStoredArray<TodoSearchItem>("toolbox_todos");
 
@@ -357,23 +350,25 @@ function App() {
     const clipboardResults: SearchResult[] = clipboardItems
       .map((item) => ({
         item,
-        score: item.type === "text" ? getSearchScore([item.content], query) : -1,
+        score: item.type === "text" ? getSearchScore(getClipboardSearchFields(item), query) : -1,
       }))
       .filter((entry) => entry.item.type === "text" && entry.score >= 0)
       .sort((left, right) => {
         if (left.item.favorite && !right.item.favorite) return -1;
         if (!left.item.favorite && right.item.favorite) return 1;
+        if (left.item.pinned && !right.item.pinned) return -1;
+        if (!left.item.pinned && right.item.pinned) return 1;
         return right.score - left.score || right.item.timestamp - left.item.timestamp;
       })
       .slice(0, 4)
       .map(({ item, score }) => ({
         id: `clipboard-${item.id}`,
-        icon: item.favorite ? "⭐" : "📋",
+        icon: item.pinned ? "📌" : item.favorite ? "⭐" : item.group === "snippet" ? "🧩" : "📋",
         title: shortenText(item.content, 32) || "剪贴板文本",
         subtitle: shortenText(item.content, 70),
-        meta: "复制文本",
+        meta: item.group === "snippet" ? "代码片段" : "复制文本",
         group: "剪贴板",
-        hint: item.favorite ? "收藏" : undefined,
+        hint: item.pinned ? "置顶" : item.favorite ? "收藏" : item.tags?.[0] ? `#${item.tags[0]}` : undefined,
         secondaryHint: "打开模块",
         payload: { type: "clipboard-text", content: item.content },
         secondaryAction: { type: "open-view", view: "clipboard" },
