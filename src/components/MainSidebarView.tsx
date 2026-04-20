@@ -219,11 +219,7 @@ function MainSidebarView({
           <div className="shortcut-list">
             <div className="shortcut-item">
               <span className="shortcut-label">显示/隐藏</span>
-              <kbd className="shortcut-key">Alt + Space</kbd>
-            </div>
-            <div className="shortcut-item">
-              <span className="shortcut-label">全局截图</span>
-              <kbd className="shortcut-key">Alt + Shift + S</kbd>
+              <kbd className="shortcut-key">Alt + Shift + Space</kbd>
             </div>
           </div>
         </section>
