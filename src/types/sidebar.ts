@@ -9,8 +9,7 @@ export type ActiveView =
   | "pomodoro";
 
 export type ViewToolId = Exclude<ActiveView, "main">;
-export type SystemAction = "notepad" | "calc" | "terminal" | "settings";
-export type ToolId = ViewToolId | SystemAction;
+export type ToolId = ViewToolId;
 
 type ToolBase = {
   id: ToolId;
@@ -27,10 +26,6 @@ export type ToolItem =
   | (ToolBase & {
       kind: "capture";
       view: "screenshot";
-    })
-  | (ToolBase & {
-      kind: "action";
-      action: SystemAction;
     });
 
 export type ToggleSwitchItem = {

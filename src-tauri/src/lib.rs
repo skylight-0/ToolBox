@@ -389,42 +389,6 @@ fn open_pinned_image_window(
     Ok(label)
 }
 
-// 执行快捷系统调用
-#[tauri::command]
-fn system_action(window: tauri::WebviewWindow, action: String) -> Result<(), String> {
-    match action.as_str() {
-        "lock_screen" => {
-            // 利用 Windows 原生的 rundll32 命令锁屏，避免额外引入 API
-            let _ = Command::new("rundll32.exe")
-                .args(["user32.dll,LockWorkStation"])
-                .spawn();
-        }
-        "settings" => {
-            let _ = Command::new("cmd")
-                .args(["/c", "start", "ms-settings:"])
-                .spawn();
-        }
-        "notepad" => {
-            let _ = Command::new("notepad.exe").spawn();
-        }
-        "calc" => {
-            let _ = Command::new("calc.exe").spawn();
-        }
-        "terminal" => {
-            // 打开现代的 Windows Terminal 或者回退到 cmd
-            let _ = Command::new("cmd").args(["/c", "start", "wt.exe"]).spawn();
-        }
-        "taskmgr" => {
-            let _ = Command::new("taskmgr.exe").spawn();
-        }
-        _ => {}
-    }
-
-    // 执行了快速启动操作之后，非常自然地自动收起侧边栏
-    let _ = window.emit("hide-sidebar", ());
-    Ok(())
-}
-
 // 启动指定路径的程序（快捷访问功能）
 #[tauri::command]
 fn launch_program(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
@@ -559,7 +523,6 @@ pub fn run() {
             do_hide_sidebar,
             toggle_desktop,
             toggle_taskbar,
-            system_action,
             launch_program,
             extract_program_icon,
             capture_screenshot,

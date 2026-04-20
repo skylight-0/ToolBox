@@ -293,7 +293,7 @@ function App() {
           icon: tool.icon,
           title: tool.label,
           subtitle: tool.desc,
-          meta: tool.kind === "action" ? "系统" : "工具",
+          meta: "工具",
           group: "常用功能",
           secondaryHint: tool.kind === "view" ? "打开模块" : undefined,
           payload: { type: "tool", toolId: tool.id },
@@ -314,8 +314,8 @@ function App() {
         icon: tool.icon,
         title: tool.label,
         subtitle: tool.desc,
-        meta: tool.kind === "action" ? "系统" : "工具",
-        group: tool.kind === "action" ? "系统操作" : "工具",
+        meta: "工具",
+        group: "工具",
         secondaryHint: tool.kind === "view" ? "打开模块" : undefined,
         payload: { type: "tool", toolId: tool.id },
         secondaryAction: createToolSecondaryAction(tool.id),
@@ -416,7 +416,7 @@ function App() {
         score,
       }));
 
-    const groupOrder = ["程序与别名", "工具", "系统操作", "剪贴板", "文本", "待办"];
+    const groupOrder = ["程序与别名", "工具", "剪贴板", "文本", "待办"];
 
     return [...quickLaunchResults, ...toolResults, ...clipboardResults, ...textResults, ...todoResults]
       .sort((left, right) => {
@@ -464,10 +464,7 @@ function App() {
       } catch (error) {
         console.error(error);
       }
-      return;
     }
-
-    invoke("system_action", { action: tool.action }).catch(console.error);
   };
 
   const handleCommandResultClick = async (result: CommandPaletteResult) => {
