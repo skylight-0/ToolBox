@@ -252,7 +252,9 @@ pub fn run() {
 
             // 注册 Alt+Space 全局快捷键
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
-            let _ = app.global_shortcut().register("Alt+Space");
+            if let Err(error) = app.global_shortcut().register("Alt+Space") {
+                eprintln!("注册全局快捷键 Alt+Space 失败: {}", error);
+            }
 
             // 初始隐藏窗口
             if let Some(window) = app.get_webview_window("main") {
