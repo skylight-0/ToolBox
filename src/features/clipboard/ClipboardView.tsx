@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, WheelEvent } from "react";
 import SubViewHeader from "../../components/SubViewHeader";
 import {
@@ -54,6 +54,41 @@ function normalizeTagInput(value: string) {
 
 function isCodeSnippet(content: string) {
   return /```|;|\bconst\b|\blet\b|\bfunction\b|\bclass\b|<\/?[a-z][\s\S]*>/i.test(content);
+}
+
+function getTextStats(content: string) {
+  return {
+    chars: content.length,
+    lines: content ? content.split(/\r?\n/).length : 0,
+  };
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function getHighlightedSnippetHtml(content: string) {
+  const escaped = escapeHtml(content);
+  return escaped
+    .replace(
+      /(\/\/.*|#.*)/g,
+      '<span class="clipboard-code-token comment">$1</span>',
+    )
+    .replace(
+      /(&quot;[^&]*&quot;|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`)/g,
+      '<span class="clipboard-code-token string">$1</span>',
+    )
+    .replace(
+      /\b(const|let|var|function|return|if|else|for|while|class|import|from|export|async|await|try|catch|switch|case|break|continue|new|public|private|protected|interface|type)\b/g,
+      '<span class="clipboard-code-token keyword">$1</span>',
+    )
+    .replace(
+      /\b(true|false|null|undefined|\d+(?:\.\d+)?)\b/g,
+      '<span class="clipboard-code-token literal">$1</span>',
+    );
 }
 
 function ClipboardView({ onBack }: ClipboardViewProps) {
@@ -195,6 +230,11 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     [clipboardHistory],
   );
 
+  const previewTextStats = useMemo(
+    () => (previewItem?.type === "text" ? getTextStats(previewItem.content) : null),
+    [previewItem],
+  );
+
   const persistItemUpdate = async (
     id: string,
     changes: {
@@ -225,6 +265,13 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
       await writeClipboardImage(item.content);
       lastClipboardContent.current = item.content;
     } catch {}
+  };
+
+  const openPreview = (item: ClipboardItem, event: MouseEvent) => {
+    event.stopPropagation();
+    setPreviewItem(item);
+    setPreviewZoom(1);
+    setPreviewPan({ x: 0, y: 0 });
   };
 
   const copyAsPlainText = async (item: ClipboardItem, event: MouseEvent) => {
@@ -448,6 +495,15 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
                     {item.type === "text" && (
                       <button
                         className="clipboard-action-btn"
+                        onClick={(event) => openPreview(item, event)}
+                        title="预览完整内容"
+                      >
+                        预览
+                      </button>
+                    )}
+                    {item.type === "text" && (
+                      <button
+                        className="clipboard-action-btn"
                         onClick={(event) => void copyAsPlainText(item, event)}
                         title="复制纯文本"
                       >
@@ -515,58 +571,96 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
         )}
       </div>
 
-      {previewItem && previewItem.type === "image" && (
+      {previewItem && (
         <div className="clipboard-preview-overlay" onClick={closePreview}>
           <div className="clipboard-preview-panel" onClick={(event) => event.stopPropagation()}>
             <div className="clipboard-preview-header">
-              <div className="clipboard-preview-zoom-controls">
-                <button
-                  className="clipboard-zoom-btn"
-                  onClick={() => setPreviewZoom((zoom) => Math.max(0.25, zoom - 0.25))}
-                >
-                  −
-                </button>
-                <span className="clipboard-zoom-level">{Math.round(previewZoom * 100)}%</span>
-                <button
-                  className="clipboard-zoom-btn"
-                  onClick={() => setPreviewZoom((zoom) => Math.min(4, zoom + 0.25))}
-                >
-                  +
-                </button>
-                <button className="clipboard-zoom-reset" onClick={() => setPreviewZoom(1)}>
-                  重置
-                </button>
-              </div>
+              {previewItem.type === "image" ? (
+                <div className="clipboard-preview-zoom-controls">
+                  <button
+                    className="clipboard-zoom-btn"
+                    onClick={() => setPreviewZoom((zoom) => Math.max(0.25, zoom - 0.25))}
+                  >
+                    −
+                  </button>
+                  <span className="clipboard-zoom-level">{Math.round(previewZoom * 100)}%</span>
+                  <button
+                    className="clipboard-zoom-btn"
+                    onClick={() => setPreviewZoom((zoom) => Math.min(4, zoom + 0.25))}
+                  >
+                    +
+                  </button>
+                  <button className="clipboard-zoom-reset" onClick={() => setPreviewZoom(1)}>
+                    重置
+                  </button>
+                </div>
+              ) : (
+                <div className="clipboard-preview-text-meta">
+                  <div className="clipboard-preview-title">
+                    {previewItem.group === "snippet" ? "代码片段预览" : "文本预览"}
+                  </div>
+                  {previewTextStats && (
+                    <div className="clipboard-preview-text-stats">
+                      <span>{previewTextStats.chars} 字符</span>
+                      <span>{previewTextStats.lines} 行</span>
+                    </div>
+                  )}
+                </div>
+              )}
               <button className="clipboard-preview-close" onClick={closePreview}>
                 ×
               </button>
             </div>
-            <div
-              className="clipboard-preview-content"
-              onWheel={handlePreviewWheel}
-              onMouseDown={handlePreviewMouseDown}
-              onMouseMove={handlePreviewMouseMove}
-              onMouseUp={handlePreviewMouseUp}
-              onMouseLeave={handlePreviewMouseUp}
-            >
-              <img
-                src={previewItem.content}
-                alt="预览图片"
-                style={{
-                  transform: `translate(${previewPan.x}px, ${previewPan.y}px) scale(${previewZoom})`,
-                  transition: isDraggingPreview.current ? "none" : "transform 0.2s ease",
-                  cursor:
-                    previewZoom > 1
-                      ? isDraggingPreview.current
-                        ? "grabbing"
-                        : "grab"
-                      : "default",
-                }}
-              />
-            </div>
+            {previewItem.type === "image" ? (
+              <div
+                className="clipboard-preview-content"
+                onWheel={handlePreviewWheel}
+                onMouseDown={handlePreviewMouseDown}
+                onMouseMove={handlePreviewMouseMove}
+                onMouseUp={handlePreviewMouseUp}
+                onMouseLeave={handlePreviewMouseUp}
+              >
+                <img
+                  src={previewItem.content}
+                  alt="预览图片"
+                  style={{
+                    transform: `translate(${previewPan.x}px, ${previewPan.y}px) scale(${previewZoom})`,
+                    transition: isDraggingPreview.current ? "none" : "transform 0.2s ease",
+                    cursor:
+                      previewZoom > 1
+                        ? isDraggingPreview.current
+                          ? "grabbing"
+                          : "grab"
+                        : "default",
+                  }}
+                />
+              </div>
+            ) : (
+              <div className={`clipboard-text-preview-panel ${previewItem.group === "snippet" ? "snippet" : ""}`}>
+                {previewItem.group === "snippet" ? (
+                  <pre
+                    className="clipboard-text-preview-full snippet"
+                    dangerouslySetInnerHTML={{
+                      __html: getHighlightedSnippetHtml(previewItem.content),
+                    }}
+                  />
+                ) : (
+                  <pre className="clipboard-text-preview-full">{previewItem.content}</pre>
+                )}
+              </div>
+            )}
             <div className="clipboard-preview-footer">
+              {previewItem.type === "text" && previewTextStats && (
+                <div className="clipboard-preview-summary">
+                  <Fragment>
+                    <span>完整内容预览</span>
+                    <span>字符 {previewTextStats.chars}</span>
+                    <span>行数 {previewTextStats.lines}</span>
+                  </Fragment>
+                </div>
+              )}
               <button className="clipboard-preview-copy" onClick={() => void copyToClipboard(previewItem)}>
-                复制图片
+                {previewItem.type === "image" ? "复制图片" : "复制完整内容"}
               </button>
             </div>
           </div>
