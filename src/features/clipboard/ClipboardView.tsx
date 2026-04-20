@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, WheelEvent } from "react";
 import SubViewHeader from "../../components/SubViewHeader";
 
@@ -11,17 +11,51 @@ type ClipboardItem = {
   type: "text" | "image";
   content: string;
   timestamp: number;
+  favorite?: boolean;
 };
+
+type ClipboardFilter = "all" | "favorites" | "text" | "image";
+
+function normalizeClipboardItems(items: ClipboardItem[]) {
+  return items.map((item) => ({
+    ...item,
+    favorite: Boolean(item.favorite),
+  }));
+}
+
+function filterDuplicateItems(items: ClipboardItem[], candidate: ClipboardItem) {
+  return items.filter(
+    (item) => !(item.type === candidate.type && item.content === candidate.content),
+  );
+}
+
+async function writeClipboardText(content: string) {
+  const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+  await writeText(content);
+}
+
+async function writeClipboardImage(dataUrl: string) {
+  const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
+  const base64Data = dataUrl.split(",")[1];
+  const binaryString = atob(base64Data);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
+  }
+  await writeImage(bytes);
+}
 
 function ClipboardView({ onBack }: ClipboardViewProps) {
   const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>(() => {
     try {
       const saved = localStorage.getItem("toolbox_clipboard_history");
-      return saved ? JSON.parse(saved) : [];
+      return saved ? normalizeClipboardItems(JSON.parse(saved)) : [];
     } catch {
       return [];
     }
   });
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [activeFilter, setActiveFilter] = useState<ClipboardFilter>("all");
   const [isMonitoring, setIsMonitoring] = useState(true);
   const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
@@ -53,12 +87,18 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
             type: "text",
             content: newText.slice(0, 10000),
             timestamp: Date.now(),
+            favorite: false,
           };
+
           setClipboardHistory((current) => {
-            const filtered = current.filter(
-              (item) => !(item.type === "text" && item.content === newText),
+            const duplicated = current.find(
+              (item) => item.type === "text" && item.content === newItem.content,
             );
-            return [newItem, ...filtered].slice(0, 50);
+            const filtered = filterDuplicateItems(current, newItem);
+            return [
+              { ...newItem, favorite: duplicated?.favorite || false },
+              ...filtered,
+            ].slice(0, 80);
           });
         }
 
@@ -88,8 +128,19 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
               type: "image",
               content: imageContent,
               timestamp: Date.now(),
+              favorite: false,
             };
-            setClipboardHistory((current) => [newItem, ...current].slice(0, 50));
+
+            setClipboardHistory((current) => {
+              const duplicated = current.find(
+                (item) => item.type === "image" && item.content === imageContent,
+              );
+              const filtered = filterDuplicateItems(current, newItem);
+              return [
+                { ...newItem, favorite: duplicated?.favorite || false },
+                ...filtered,
+              ].slice(0, 80);
+            });
           }
         } catch {}
       } catch {}
@@ -99,24 +150,55 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     return () => clearInterval(interval);
   }, [isMonitoring]);
 
+  const visibleItems = useMemo(() => {
+    const keyword = searchKeyword.trim().toLowerCase();
+
+    return clipboardHistory
+      .filter((item) => {
+        if (activeFilter === "favorites" && !item.favorite) return false;
+        if (activeFilter === "text" && item.type !== "text") return false;
+        if (activeFilter === "image" && item.type !== "image") return false;
+        if (!keyword) return true;
+        if (item.type === "image") {
+          return "图片 image".includes(keyword);
+        }
+        return item.content.toLowerCase().includes(keyword);
+      })
+      .sort((left, right) => {
+        if (left.favorite && !right.favorite) return -1;
+        if (!left.favorite && right.favorite) return 1;
+        return right.timestamp - left.timestamp;
+      });
+  }, [activeFilter, clipboardHistory, searchKeyword]);
+
   const copyToClipboard = async (item: ClipboardItem) => {
     try {
-      const { writeText, writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
       if (item.type === "text") {
-        await writeText(item.content);
+        await writeClipboardText(item.content);
         lastClipboardContent.current = item.content;
         return;
       }
 
-      const base64Data = item.content.split(",")[1];
-      const binaryString = atob(base64Data);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i += 1) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      await writeImage(bytes);
+      await writeClipboardImage(item.content);
       lastClipboardContent.current = item.content;
     } catch {}
+  };
+
+  const copyAsPlainText = async (item: ClipboardItem, event: MouseEvent) => {
+    event.stopPropagation();
+    if (item.type !== "text") return;
+
+    try {
+      await writeClipboardText(item.content);
+      lastClipboardContent.current = item.content;
+    } catch {}
+  };
+
+  const toggleFavorite = (id: string, event: MouseEvent) => {
+    event.stopPropagation();
+    setClipboardHistory((current) =>
+      current.map((item) => (item.id === id ? { ...item, favorite: !item.favorite } : item)),
+    );
   };
 
   const deleteClipboardItem = (id: string, event: MouseEvent) => {
@@ -125,7 +207,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
   };
 
   const clearClipboardHistory = () => {
-    setClipboardHistory([]);
+    setClipboardHistory((current) => current.filter((item) => item.favorite));
   };
 
   const closePreview = () => {
@@ -175,6 +257,13 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     return date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
   };
 
+  const filters: Array<{ id: ClipboardFilter; label: string }> = [
+    { id: "all", label: "全部" },
+    { id: "favorites", label: "收藏" },
+    { id: "text", label: "文本" },
+    { id: "image", label: "图片" },
+  ];
+
   const actions = (
     <div className="clipboard-header-actions">
       <button
@@ -184,9 +273,9 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
       >
         {isMonitoring ? "⏸️ 监控中" : "▶️ 已暂停"}
       </button>
-      {clipboardHistory.length > 0 && (
-        <button className="clipboard-clear-btn" onClick={clearClipboardHistory} title="清空历史">
-          🗑️ 清空
+      {clipboardHistory.some((item) => !item.favorite) && (
+        <button className="clipboard-clear-btn" onClick={clearClipboardHistory} title="清空非收藏">
+          🗑️ 清空非收藏
         </button>
       )}
     </div>
@@ -196,21 +285,41 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     <div className="sub-view">
       <SubViewHeader title="剪切板增强" onBack={onBack} actions={actions} />
       <div className="sub-view-content clipboard-container">
-        {clipboardHistory.length === 0 ? (
+        <div className="clipboard-toolbar">
+          <input
+            className="clipboard-search-input"
+            placeholder="搜索文本内容，或筛选收藏项..."
+            value={searchKeyword}
+            onChange={(event) => setSearchKeyword(event.target.value)}
+          />
+          <div className="clipboard-filter-row">
+            {filters.map((filter) => (
+              <button
+                key={filter.id}
+                className={`clipboard-filter-btn ${activeFilter === filter.id ? "active" : ""}`}
+                onClick={() => setActiveFilter(filter.id)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {visibleItems.length === 0 ? (
           <div className="clipboard-empty">
             <div className="clipboard-empty-icon">📋</div>
-            <div className="clipboard-empty-text">暂无复制记录</div>
-            <div className="clipboard-empty-hint">复制文本或图片后将自动记录</div>
+            <div className="clipboard-empty-text">暂无匹配记录</div>
+            <div className="clipboard-empty-hint">复制文本或图片后将自动记录，可收藏常用条目</div>
           </div>
         ) : (
           <div className="clipboard-list">
-            {clipboardHistory.map((item) => (
+            {visibleItems.map((item) => (
               <div key={item.id} className="clipboard-item" onClick={() => copyToClipboard(item)}>
                 <div className="clipboard-item-content">
                   {item.type === "text" ? (
                     <div className="clipboard-text-preview">
-                      {item.content.slice(0, 200)}
-                      {item.content.length > 200 && "..."}
+                      {item.content.slice(0, 280)}
+                      {item.content.length > 280 && "..."}
                     </div>
                   ) : (
                     <div
@@ -230,13 +339,32 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
                   <span className="clipboard-item-type">
                     {item.type === "text" ? "文本" : "图片"}
                   </span>
-                  <button
-                    className="clipboard-delete-btn"
-                    onClick={(event) => deleteClipboardItem(item.id, event)}
-                    title="删除"
-                  >
-                    ×
-                  </button>
+                  {item.favorite && <span className="clipboard-item-favorite">收藏</span>}
+                  <div className="clipboard-item-actions">
+                    {item.type === "text" && (
+                      <button
+                        className="clipboard-action-btn"
+                        onClick={(event) => copyAsPlainText(item, event)}
+                        title="复制纯文本"
+                      >
+                        纯文本
+                      </button>
+                    )}
+                    <button
+                      className={`clipboard-action-btn ${item.favorite ? "active" : ""}`}
+                      onClick={(event) => toggleFavorite(item.id, event)}
+                      title={item.favorite ? "取消收藏" : "收藏"}
+                    >
+                      ★
+                    </button>
+                    <button
+                      className="clipboard-delete-btn"
+                      onClick={(event) => deleteClipboardItem(item.id, event)}
+                      title="删除"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

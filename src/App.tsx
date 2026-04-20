@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import "./App.css";
 import MainSidebarView from "./components/MainSidebarView";
+import type { CommandPaletteResult } from "./components/MainSidebarView";
 import { TOOLS } from "./constants/sidebar";
 import ClipboardView from "./features/clipboard/ClipboardView";
 import JsonToolView from "./features/json/JsonToolView";
@@ -14,6 +15,112 @@ import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
 import type { ActiveView, ToggleSwitchItem, ToolId, ViewToolId } from "./types/sidebar";
 
+type SearchResultPayload =
+  | { type: "tool"; toolId: ToolId }
+  | { type: "quicklaunch"; path: string }
+  | { type: "clipboard-text"; content: string }
+  | { type: "clipboard-image"; content: string }
+  | { type: "view"; view: ViewToolId };
+
+type SecondaryAction =
+  | { type: "open-view"; view: ViewToolId }
+  | { type: "none" };
+
+type SearchResult = CommandPaletteResult & {
+  payload: SearchResultPayload;
+  secondaryAction: SecondaryAction;
+  score: number;
+};
+
+type ClipboardSearchItem = {
+  id: string;
+  type: "text" | "image";
+  content: string;
+  timestamp: number;
+  favorite?: boolean;
+};
+
+type QuickLaunchSearchItem = {
+  id: string;
+  name: string;
+  path: string;
+  icon?: string;
+  alias?: string;
+  groupId?: string;
+  launchCount?: number;
+  lastLaunchedAt?: number;
+};
+
+type TextEntrySearchItem = {
+  id: string;
+  title: string;
+  content: string;
+};
+
+type TodoSearchItem = {
+  id: string;
+  text: string;
+  completed: boolean;
+};
+
+function loadStoredArray<T>(key: string): T[] {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? (JSON.parse(saved) as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function getSearchScore(fields: string[], query: string) {
+  if (!query) return 0;
+
+  let bestScore = -1;
+  for (const field of fields) {
+    const value = field.toLowerCase();
+    const index = value.indexOf(query);
+    if (index === -1) continue;
+
+    let score = 40 - index;
+    if (value === query) score += 70;
+    if (value.startsWith(query)) score += 35;
+    if (value.split(/\s+/).some((part) => part.startsWith(query))) score += 18;
+    bestScore = Math.max(bestScore, score);
+  }
+
+  return bestScore;
+}
+
+function shortenText(value: string, limit: number) {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (!collapsed) return "";
+  return collapsed.length > limit ? `${collapsed.slice(0, limit)}...` : collapsed;
+}
+
+function createToolSecondaryAction(toolId: ToolId): SecondaryAction {
+  const tool = TOOLS.find((item) => item.id === toolId);
+  if (tool?.kind === "view") {
+    return { type: "open-view", view: tool.view };
+  }
+  return { type: "none" };
+}
+
+async function writeClipboardText(content: string) {
+  const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+  await writeText(content);
+}
+
+async function writeClipboardImage(dataUrl: string) {
+  const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
+  const base64Data = dataUrl.split(",")[1];
+  const binaryString = atob(base64Data);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
+  }
+  await writeImage(bytes);
+}
+
 function App() {
   const [sidebarWidth, setSidebarWidth] = useState(400);
   const [previewWidth, setPreviewWidth] = useState<number | null>(null);
@@ -21,6 +128,9 @@ function App() {
   const [isOpening, setIsOpening] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeView, setActiveView] = useState<ActiveView>("main");
+  const [commandQuery, setCommandQuery] = useState("");
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const [screenshotRefreshToken, setScreenshotRefreshToken] = useState(0);
   const [switchStates, setSwitchStates] = useState<Record<ToggleSwitchItem["id"], boolean>>({
     desktop: true,
@@ -34,6 +144,7 @@ function App() {
   });
 
   const sidebarRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
@@ -122,6 +233,213 @@ function App() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setActiveView("main");
+        openCommandPalette();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const commandResults = useMemo<SearchResult[]>(() => {
+    const query = commandQuery.trim().toLowerCase();
+    const quickLaunchItems = loadStoredArray<QuickLaunchSearchItem>("toolbox_quicklaunch");
+    const clipboardItems = loadStoredArray<ClipboardSearchItem>("toolbox_clipboard_history");
+    const textEntries = loadStoredArray<TextEntrySearchItem>("toolbox_text_entries");
+    const todoItems = loadStoredArray<TodoSearchItem>("toolbox_todos");
+
+    if (!query) {
+      const suggestions: SearchResult[] = [
+        ...quickLaunchItems
+          .filter((item) => (item.launchCount || 0) > 0)
+          .sort((left, right) => (right.lastLaunchedAt || 0) - (left.lastLaunchedAt || 0))
+          .slice(0, 4)
+          .map((item, index) => ({
+            id: `suggest-quicklaunch-${item.id}`,
+            icon: item.icon ? "📌" : "📄",
+            title: item.alias ? `${item.alias} · ${item.name}` : item.name,
+            subtitle: shortenText(item.path, 48),
+            meta: "快捷启动",
+            group: "最近使用",
+            hint: index === 0 ? "Enter" : undefined,
+            secondaryHint: "打开模块",
+            payload: { type: "quicklaunch", path: item.path },
+            secondaryAction: { type: "open-view", view: "quicklaunch" },
+            score: 100 - index,
+          })),
+        ...clipboardItems
+          .filter((item) => item.type === "text" && item.favorite)
+          .sort((left, right) => right.timestamp - left.timestamp)
+          .slice(0, 3)
+          .map((item, index) => ({
+            id: `suggest-clipboard-${item.id}`,
+            icon: "⭐",
+            title: shortenText(item.content, 32) || "收藏文本",
+            subtitle: shortenText(item.content, 70),
+            meta: "复制文本",
+            group: "剪贴板收藏",
+            secondaryHint: "打开模块",
+            payload: { type: "clipboard-text", content: item.content },
+            secondaryAction: { type: "open-view", view: "clipboard" },
+            score: 80 - index,
+          })),
+        ...TOOLS.slice(0, 4).map((tool, index) => ({
+          id: `suggest-tool-${tool.id}`,
+          icon: tool.icon,
+          title: tool.label,
+          subtitle: tool.desc,
+          meta: tool.kind === "action" ? "系统" : "工具",
+          group: "常用功能",
+          secondaryHint: tool.kind === "view" ? "打开模块" : undefined,
+          payload: { type: "tool", toolId: tool.id },
+          secondaryAction: createToolSecondaryAction(tool.id),
+          score: 60 - index,
+        })),
+      ];
+
+      return suggestions.slice(0, 10);
+    }
+
+    const toolResults: SearchResult[] = TOOLS.filter((tool) =>
+      getSearchScore([tool.label, tool.desc], query) >= 0,
+    ).map((tool) => {
+      const score = getSearchScore([tool.label, tool.desc], query);
+      return {
+        id: `tool-${tool.id}`,
+        icon: tool.icon,
+        title: tool.label,
+        subtitle: tool.desc,
+        meta: tool.kind === "action" ? "系统" : "工具",
+        group: tool.kind === "action" ? "系统操作" : "工具",
+        secondaryHint: tool.kind === "view" ? "打开模块" : undefined,
+        payload: { type: "tool", toolId: tool.id },
+        secondaryAction: createToolSecondaryAction(tool.id),
+        score,
+      };
+    });
+
+    const quickLaunchResults: SearchResult[] = quickLaunchItems
+      .map((item) => ({
+        item,
+        score: getSearchScore([item.alias || "", item.name, item.path], query),
+      }))
+      .filter((entry) => entry.score >= 0)
+      .sort((left, right) => {
+        const usageDelta =
+          ((right.item.lastLaunchedAt || 0) + (right.item.launchCount || 0) * 500) -
+          ((left.item.lastLaunchedAt || 0) + (left.item.launchCount || 0) * 500);
+        return right.score - left.score || usageDelta;
+      })
+      .slice(0, 5)
+      .map(({ item, score }) => ({
+        id: `quicklaunch-${item.id}`,
+        icon: item.icon ? "📌" : "📄",
+        title: item.alias ? `${item.alias} · ${item.name}` : item.name,
+        subtitle: shortenText(item.path, 46),
+        meta: "快捷启动",
+        group: "程序与别名",
+        hint: item.alias ? `@${item.alias}` : undefined,
+        secondaryHint: "打开模块",
+        payload: { type: "quicklaunch", path: item.path },
+        secondaryAction: { type: "open-view", view: "quicklaunch" },
+        score,
+      }));
+
+    const clipboardResults: SearchResult[] = clipboardItems
+      .map((item) => ({
+        item,
+        score: item.type === "text" ? getSearchScore([item.content], query) : -1,
+      }))
+      .filter((entry) => entry.item.type === "text" && entry.score >= 0)
+      .sort((left, right) => {
+        if (left.item.favorite && !right.item.favorite) return -1;
+        if (!left.item.favorite && right.item.favorite) return 1;
+        return right.score - left.score || right.item.timestamp - left.item.timestamp;
+      })
+      .slice(0, 4)
+      .map(({ item, score }) => ({
+        id: `clipboard-${item.id}`,
+        icon: item.favorite ? "⭐" : "📋",
+        title: shortenText(item.content, 32) || "剪贴板文本",
+        subtitle: shortenText(item.content, 70),
+        meta: "复制文本",
+        group: "剪贴板",
+        hint: item.favorite ? "收藏" : undefined,
+        secondaryHint: "打开模块",
+        payload: { type: "clipboard-text", content: item.content },
+        secondaryAction: { type: "open-view", view: "clipboard" },
+        score,
+      }));
+
+    const textResults: SearchResult[] = textEntries
+      .map((item) => ({
+        item,
+        score: getSearchScore([item.title, item.content], query),
+      }))
+      .filter((entry) => entry.score >= 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 3)
+      .map(({ item, score }) => ({
+        id: `text-${item.id}`,
+        icon: "🗂️",
+        title: item.title || "未命名文本",
+        subtitle: shortenText(item.content, 70),
+        meta: "打开文本管理",
+        group: "文本",
+        payload: { type: "view", view: "textmanager" },
+        secondaryAction: { type: "open-view", view: "textmanager" },
+        score,
+      }));
+
+    const todoResults: SearchResult[] = todoItems
+      .map((item) => ({
+        item,
+        score: getSearchScore([item.text], query),
+      }))
+      .filter((entry) => entry.score >= 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 3)
+      .map(({ item, score }) => ({
+        id: `todo-${item.id}`,
+        icon: item.completed ? "✅" : "☑️",
+        title: item.text,
+        subtitle: item.completed ? "已完成待办" : "待办事项",
+        meta: "打开待办",
+        group: "待办",
+        payload: { type: "view", view: "todo" },
+        secondaryAction: { type: "open-view", view: "todo" },
+        score,
+      }));
+
+    const groupOrder = ["程序与别名", "工具", "系统操作", "剪贴板", "文本", "待办"];
+
+    return [...quickLaunchResults, ...toolResults, ...clipboardResults, ...textResults, ...todoResults]
+      .sort((left, right) => {
+        const groupDelta = groupOrder.indexOf(left.group) - groupOrder.indexOf(right.group);
+        return groupDelta || right.score - left.score;
+      })
+      .slice(0, 12);
+  }, [commandQuery]);
+
+  useEffect(() => {
+    if (!isCommandPaletteOpen) {
+      setSelectedCommandId(null);
+      return;
+    }
+
+    setSelectedCommandId((current) => {
+      if (current && commandResults.some((result) => result.id === current)) {
+        return current;
+      }
+      return commandResults[0]?.id ?? null;
+    });
+  }, [commandResults, isCommandPaletteOpen]);
+
   const handleMouseDown = (event: ReactMouseEvent) => {
     isDragging.current = true;
     dragStartX.current = event.screenX;
@@ -150,6 +468,118 @@ function App() {
     }
 
     invoke("system_action", { action: tool.action }).catch(console.error);
+  };
+
+  const handleCommandResultClick = async (result: CommandPaletteResult) => {
+    const resolved = commandResults.find((item) => item.id === result.id);
+    if (!resolved) return;
+
+    setCommandQuery("");
+    setIsCommandPaletteOpen(false);
+    searchInputRef.current?.blur();
+
+    try {
+      switch (resolved.payload.type) {
+        case "tool":
+          await handleToolClick(resolved.payload.toolId);
+          break;
+        case "quicklaunch":
+          await invoke("launch_program", { path: resolved.payload.path });
+          break;
+        case "clipboard-text":
+          await writeClipboardText(resolved.payload.content);
+          break;
+        case "clipboard-image":
+          await writeClipboardImage(resolved.payload.content);
+          break;
+        case "view":
+          setActiveView(resolved.payload.view);
+          break;
+        default:
+          break;
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleCommandResultSecondaryClick = async (result: CommandPaletteResult) => {
+    const resolved = commandResults.find((item) => item.id === result.id);
+    if (!resolved || resolved.secondaryAction.type === "none") return;
+
+    setIsCommandPaletteOpen(false);
+    setCommandQuery("");
+    searchInputRef.current?.blur();
+    setActiveView(resolved.secondaryAction.view);
+  };
+
+  const handleCommandQueryChange = (value: string) => {
+    setCommandQuery(value);
+    setIsCommandPaletteOpen(true);
+  };
+
+  const openCommandPalette = () => {
+    setIsCommandPaletteOpen(true);
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+  };
+
+  const handleCommandInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (!commandResults.length && event.key !== "Escape") return;
+
+    const currentIndex = commandResults.findIndex((result) => result.id === selectedCommandId);
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % commandResults.length;
+      setSelectedCommandId(commandResults[nextIndex]?.id ?? null);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      const nextIndex =
+        currentIndex <= 0 ? commandResults.length - 1 : currentIndex - 1;
+      setSelectedCommandId(commandResults[nextIndex]?.id ?? null);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (event.ctrlKey) {
+        const selected =
+          commandResults.find((result) => result.id === selectedCommandId) ?? commandResults[0];
+        if (selected) {
+          void handleCommandResultSecondaryClick(selected);
+        }
+        return;
+      }
+
+      const selected =
+        commandResults.find((result) => result.id === selectedCommandId) ?? commandResults[0];
+      if (selected) {
+        void handleCommandResultClick(selected);
+      }
+      return;
+    }
+
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const selected =
+        commandResults.find((result) => result.id === selectedCommandId) ?? commandResults[0];
+      if (selected) {
+        void handleCommandResultSecondaryClick(selected);
+      }
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (commandQuery) {
+        setCommandQuery("");
+      } else {
+        setIsCommandPaletteOpen(false);
+        searchInputRef.current?.blur();
+      }
+    }
   };
 
   const handleSwitchClick = async (switchId: ToggleSwitchItem["id"]) => {
@@ -239,6 +669,17 @@ function App() {
             currentTime={currentTime}
             tools={TOOLS}
             switches={switches}
+            commandQuery={commandQuery}
+            isCommandPaletteOpen={isCommandPaletteOpen}
+            selectedCommandId={selectedCommandId}
+            commandResults={commandResults}
+            searchInputRef={searchInputRef}
+            onCommandPaletteOpen={openCommandPalette}
+            onCommandInputKeyDown={handleCommandInputKeyDown}
+            onCommandQueryChange={handleCommandQueryChange}
+            onCommandResultHover={setSelectedCommandId}
+            onCommandResultClick={handleCommandResultClick}
+            onCommandResultSecondaryClick={handleCommandResultSecondaryClick}
             onToolClick={handleToolClick}
             onSwitchClick={handleSwitchClick}
           />

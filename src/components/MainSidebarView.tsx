@@ -1,12 +1,55 @@
+import type { KeyboardEvent, RefObject } from "react";
 import type { ToggleSwitchItem, ToolItem } from "../types/sidebar";
+
+export type CommandPaletteResult = {
+  id: string;
+  icon: string;
+  title: string;
+  subtitle: string;
+  meta?: string;
+  group: string;
+  hint?: string;
+  secondaryHint?: string;
+};
 
 type MainSidebarViewProps = {
   currentTime: Date;
   tools: ToolItem[];
   switches: ToggleSwitchItem[];
+  commandQuery: string;
+  isCommandPaletteOpen: boolean;
+  selectedCommandId: string | null;
+  commandResults: CommandPaletteResult[];
+  searchInputRef: RefObject<HTMLInputElement | null>;
+  onCommandPaletteOpen: () => void;
+  onCommandInputKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  onCommandQueryChange: (value: string) => void;
+  onCommandResultHover: (resultId: string) => void;
+  onCommandResultClick: (result: CommandPaletteResult) => void;
+  onCommandResultSecondaryClick: (result: CommandPaletteResult) => void;
   onToolClick: (toolId: ToolItem["id"]) => void;
   onSwitchClick: (switchId: ToggleSwitchItem["id"]) => void;
 };
+
+function renderHighlightedText(value: string, query: string) {
+  const keyword = query.trim();
+  if (!keyword) return value;
+
+  const lowerValue = value.toLowerCase();
+  const lowerKeyword = keyword.toLowerCase();
+  const start = lowerValue.indexOf(lowerKeyword);
+
+  if (start === -1) return value;
+
+  const end = start + keyword.length;
+  return (
+    <>
+      {value.slice(0, start)}
+      <mark className="command-highlight">{value.slice(start, end)}</mark>
+      {value.slice(end)}
+    </>
+  );
+}
 
 function formatTime(date: Date) {
   return date.toLocaleTimeString("zh-CN", {
@@ -26,9 +69,22 @@ function MainSidebarView({
   currentTime,
   tools,
   switches,
+  commandQuery,
+  isCommandPaletteOpen,
+  selectedCommandId,
+  commandResults,
+  searchInputRef,
+  onCommandPaletteOpen,
+  onCommandInputKeyDown,
+  onCommandQueryChange,
+  onCommandResultHover,
+  onCommandResultClick,
+  onCommandResultSecondaryClick,
   onToolClick,
   onSwitchClick,
 }: MainSidebarViewProps) {
+  let lastGroup = "";
+
   return (
     <div className="main-view">
       <div className="functional-area">
@@ -36,6 +92,106 @@ function MainSidebarView({
           <div className="time-display">{formatTime(currentTime)}</div>
           <div className="date-display">{formatDate(currentTime)}</div>
         </header>
+
+        <section className="command-palette-section">
+          <div className="section-title">
+            <span className="section-icon">⌘</span>
+            命令面板
+          </div>
+          <div className="command-palette-compact-shell" onClick={onCommandPaletteOpen}>
+            <div className="command-palette-compact-placeholder">输入命令、程序、别名或文本内容...</div>
+            <kbd className="command-palette-key">Ctrl + K</kbd>
+          </div>
+          {isCommandPaletteOpen && (
+            <div className="command-palette-overlay" onMouseDown={(event) => event.preventDefault()}>
+              <div className="command-palette-backdrop" />
+              <div className="command-palette-modal">
+                <div className="command-palette-shell">
+                  <span className="command-palette-search-icon">⌕</span>
+                  <input
+                    ref={searchInputRef}
+                    className="command-palette-input"
+                    value={commandQuery}
+                    onFocus={onCommandPaletteOpen}
+                    onKeyDown={onCommandInputKeyDown}
+                    onChange={(event) => onCommandQueryChange(event.target.value)}
+                    placeholder="输入命令、程序、别名或文本内容..."
+                  />
+                  {commandQuery && (
+                    <button
+                      className="command-palette-clear"
+                      onClick={() => onCommandQueryChange("")}
+                      title="清空搜索"
+                    >
+                      ×
+                    </button>
+                  )}
+                  <kbd className="command-palette-key">Esc</kbd>
+                </div>
+                <div className="command-results">
+                  {commandResults.length > 0 ? (
+                    <>
+                      {commandResults.map((result) => {
+                        const shouldRenderGroup = lastGroup !== result.group;
+                        lastGroup = result.group;
+
+                        return (
+                          <div key={result.id}>
+                            {shouldRenderGroup && (
+                              <div className="command-results-group">{result.group}</div>
+                            )}
+                            <div
+                              className={`command-result-item ${selectedCommandId === result.id ? "selected" : ""}`}
+                              onMouseEnter={() => onCommandResultHover(result.id)}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => onCommandResultClick(result)}
+                            >
+                              <div className="command-result-icon">{result.icon}</div>
+                              <div className="command-result-body">
+                                <div className="command-result-title">
+                                  {renderHighlightedText(result.title, commandQuery)}
+                                </div>
+                                <div className="command-result-subtitle">
+                                  {renderHighlightedText(result.subtitle, commandQuery)}
+                                </div>
+                              </div>
+                              <div className="command-result-side">
+                                {result.meta && <div className="command-result-meta">{result.meta}</div>}
+                                {result.hint && <div className="command-result-hint">{result.hint}</div>}
+                                {result.secondaryHint && (
+                                  <button
+                                    className="command-result-secondary"
+                                    onMouseDown={(event) => event.preventDefault()}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      onCommandResultSecondaryClick(result);
+                                    }}
+                                  >
+                                    {result.secondaryHint}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div className="command-results-footer">
+                        <span>↑ ↓ 选择</span>
+                        <span>Enter 执行</span>
+                        <span>Tab / Ctrl+Enter 副动作</span>
+                        <span>Esc 关闭</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="command-results-empty">
+                      {commandQuery ? "没有找到匹配结果" : "输入关键词，或直接从建议项里执行"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
 
         <section className="tools-section">
           <h2 className="section-title">
