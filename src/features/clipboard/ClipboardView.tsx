@@ -209,10 +209,6 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
       .sort((left, right) => {
         if (left.pinned && !right.pinned) return -1;
         if (!left.pinned && right.pinned) return 1;
-        if (left.favorite && !right.favorite) return -1;
-        if (!left.favorite && right.favorite) return 1;
-        if (left.group === "snippet" && right.group !== "snippet") return -1;
-        if (left.group !== "snippet" && right.group === "snippet") return 1;
         return right.timestamp - left.timestamp;
       });
   }, [activeFilter, clipboardHistory, searchKeyword]);
