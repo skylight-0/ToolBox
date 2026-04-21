@@ -8,6 +8,7 @@ use windows::{
         UI::WindowsAndMessaging::{FindWindowExW, FindWindowW, ShowWindow, SW_HIDE, SW_SHOWNA},
     },
 };
+use crate::LaunchTargetRequest;
 
 pub fn toggle_desktop(show: bool) -> Result<(), String> {
     unsafe {
@@ -99,15 +100,21 @@ fn run_hidden_powershell(script: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-pub fn launch_program(_window: WebviewWindow, path: String) -> Result<(), String> {
+pub fn launch_program(_window: WebviewWindow, request: LaunchTargetRequest) -> Result<(), String> {
     let mut cmd = Command::new("cmd");
-    cmd.args(["/c", "start", "", &path]);
+    let item_type = request.item_type.unwrap_or_else(|| "app".to_string());
+    let mut command = format!("start \"\" \"{}\"", request.target.replace('"', "\"\""));
+    if matches!(item_type.as_str(), "app" | "script") && request.args.as_deref().unwrap_or("").trim().len() > 0 {
+        command.push(' ');
+        command.push_str(request.args.as_deref().unwrap_or("").trim());
+    }
+    cmd.args(["/c", &command]);
 
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    cmd.spawn().map_err(|e| format!("启动程序失败: {}", e))?;
+    cmd.spawn().map_err(|e| format!("启动目标失败: {}", e))?;
     Ok(())
 }
 

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import "./App.css";
 import MainSidebarView from "./components/MainSidebarView";
-import type { CommandPaletteResult } from "./components/MainSidebarView";
+import type { CommandPaletteResult, SidebarNotification } from "./components/MainSidebarView";
 import { TOOLS } from "./constants/sidebar";
 import ClipboardView from "./features/clipboard/ClipboardView";
 import { getClipboardSearchFields, type ClipboardItem as ClipboardSearchItem, normalizeClipboardItems } from "./features/clipboard/clipboardModel";
@@ -13,15 +13,16 @@ import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
 import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
-import { TOOLBOX_DATA_CHANGED } from "./utils/dataSync";
+import { notifyToolboxDataChanged, TOOLBOX_DATA_CHANGED } from "./utils/dataSync";
 import type { ActiveView, ToggleSwitchItem, ToolId, ViewToolId } from "./types/sidebar";
 
 type SearchResultPayload =
   | { type: "tool"; toolId: ToolId }
-  | { type: "quicklaunch"; path: string }
+  | { type: "quicklaunch"; target: string; itemType: string; args: string }
   | { type: "clipboard-text"; content: string }
   | { type: "clipboard-image"; content: string }
-  | { type: "view"; view: ViewToolId };
+  | { type: "view"; view: ViewToolId }
+  | { type: "action"; actionKey: string };
 
 type SecondaryAction =
   | { type: "open-view"; view: ViewToolId }
@@ -39,7 +40,10 @@ type QuickLaunchSearchItem = {
   path: string;
   icon?: string;
   alias?: string;
+  itemType?: string;
+  args?: string;
   groupId?: string;
+  sortOrder?: number;
   launchCount?: number;
   lastLaunchedAt?: number;
 };
@@ -54,6 +58,21 @@ type TodoSearchItem = {
   id: string;
   text: string;
   completed: boolean;
+};
+
+type CommandHistoryEntry = {
+  actionKey: string;
+  title: string;
+  groupName: string;
+  icon: string;
+  meta?: string;
+  payloadJson: string;
+  lastUsedAt: number;
+  useCount: number;
+};
+
+type ToastNotification = SidebarNotification & {
+  visible: boolean;
 };
 
 function getSearchScore(fields: string[], query: string) {
@@ -79,14 +98,6 @@ function shortenText(value: string, limit: number) {
   const collapsed = value.replace(/\s+/g, " ").trim();
   if (!collapsed) return "";
   return collapsed.length > limit ? `${collapsed.slice(0, limit)}...` : collapsed;
-}
-
-function createToolSecondaryAction(toolId: ToolId): SecondaryAction {
-  const tool = TOOLS.find((item) => item.id === toolId);
-  if (tool?.kind === "view") {
-    return { type: "open-view", view: tool.view };
-  }
-  return { type: "none" };
 }
 
 async function writeClipboardText(content: string) {
@@ -115,10 +126,15 @@ function App() {
   const [commandQuery, setCommandQuery] = useState("");
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const [commandFilter, setCommandFilter] = useState("all");
   const [quickLaunchSearchItems, setQuickLaunchSearchItems] = useState<QuickLaunchSearchItem[]>([]);
   const [clipboardSearchItems, setClipboardSearchItems] = useState<ClipboardSearchItem[]>([]);
   const [textSearchEntries, setTextSearchEntries] = useState<TextEntrySearchItem[]>([]);
   const [todoSearchItems, setTodoSearchItems] = useState<TodoSearchItem[]>([]);
+  const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>([]);
+  const [notifications, setNotifications] = useState<SidebarNotification[]>([]);
+  const [toastNotifications, setToastNotifications] = useState<ToastNotification[]>([]);
+  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
   const [switchStates, setSwitchStates] = useState<Record<ToggleSwitchItem["id"], boolean>>({
     desktop: true,
     taskbar: true,
@@ -137,6 +153,40 @@ function App() {
   const dragStartWidth = useRef(0);
   const previewWidthRef = useRef<number | null>(null);
   const isDialogOpenRef = useRef(false);
+  const commandFilters = [
+    { id: "all", label: "全部" },
+    { id: "actions", label: "动作" },
+    { id: "programs", label: "程序" },
+    { id: "clipboard", label: "剪贴板" },
+    { id: "text", label: "文本" },
+    { id: "todos", label: "待办" },
+  ];
+
+  const unreadNotificationCount = notifications.filter((item) => !item.read).length;
+
+  const appendToast = (notification: SidebarNotification) => {
+    setToastNotifications((current) => {
+      const next = [...current, { ...notification, visible: true }].slice(-3);
+      return next;
+    });
+    if (notification.level !== "error") {
+      window.setTimeout(() => {
+        setToastNotifications((current) => current.filter((item) => item.id !== notification.id));
+      }, 3500);
+    }
+  };
+
+  const loadMetaData = () => {
+    void Promise.all([
+      invoke<CommandHistoryEntry[]>("get_command_history"),
+      invoke<SidebarNotification[]>("get_notification_history"),
+    ])
+      .then(([history, notificationItems]) => {
+        setCommandHistory(history || []);
+        setNotifications(notificationItems || []);
+      })
+      .catch(console.error);
+  };
 
   const finishDragging = (commitWidth: boolean) => {
     if (!isDragging.current) return;
@@ -200,6 +250,18 @@ function App() {
   }, []);
 
   useEffect(() => {
+    loadMetaData();
+    const unlistenAppNotification = listen<SidebarNotification>("app-notification", (event) => {
+      const notification = event.payload;
+      setNotifications((current) => [notification, ...current.filter((item) => item.id !== notification.id)].slice(0, 50));
+      appendToast(notification);
+    });
+    return () => {
+      unlistenAppNotification.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
       if (!isDragging.current) return;
       const delta = dragStartX.current - event.screenX;
@@ -259,10 +321,113 @@ function App() {
     loadUnifiedSearchData();
     const handleDataChanged = () => {
       loadUnifiedSearchData();
+      loadMetaData();
     };
     window.addEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
     return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
   }, []);
+
+  const actionResults = useMemo<SearchResult[]>(() => {
+    const actions: SearchResult[] = [
+      {
+        id: "action-open-clipboard",
+        icon: "📋",
+        title: "打开剪贴板",
+        subtitle: "进入剪贴板模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "clipboard" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-quicklaunch",
+        icon: "📌",
+        title: "打开快捷访问",
+        subtitle: "进入快捷访问模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "quicklaunch" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-textmanager",
+        icon: "🗂️",
+        title: "打开文本管理",
+        subtitle: "进入文本管理模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "textmanager" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-todo",
+        icon: "☑️",
+        title: "打开待办",
+        subtitle: "进入待办模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "todo" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-pomodoro",
+        icon: "🍅",
+        title: "打开番茄钟",
+        subtitle: "进入番茄钟模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "pomodoro" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-toggle-desktop",
+        icon: "👁️",
+        title: switchStates.desktop ? "隐藏桌面图标" : "显示桌面图标",
+        subtitle: "切换桌面图标显示状态",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "action", actionKey: "toggle-desktop" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-toggle-taskbar",
+        icon: "🚀",
+        title: switchStates.taskbar ? "隐藏任务栏" : "显示任务栏",
+        subtitle: "切换任务栏显示状态",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "action", actionKey: "toggle-taskbar" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-clear-clipboard",
+        icon: "🧹",
+        title: "清空剪贴板历史",
+        subtitle: "保留收藏和置顶项",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "action", actionKey: "clear-clipboard" },
+        secondaryAction: { type: "open-view", view: "clipboard" },
+        score: 40,
+      },
+    ];
+    return actions;
+  }, [switchStates.desktop, switchStates.taskbar]);
 
   const commandResults = useMemo<SearchResult[]>(() => {
     const query = commandQuery.trim().toLowerCase();
@@ -271,22 +436,46 @@ function App() {
     const textEntries = textSearchEntries;
     const todoItems = todoSearchItems;
 
+    const historyResults: SearchResult[] = commandHistory
+      .slice(0, 4)
+      .flatMap((entry, index) => {
+        try {
+          const parsedPayload = JSON.parse(entry.payloadJson) as SearchResultPayload;
+          return [{
+            id: `history-${entry.actionKey}`,
+            icon: entry.icon,
+            title: entry.title,
+            subtitle: entry.meta || "最近执行",
+            meta: "最近执行",
+            group: "最近执行",
+            category: "actions",
+            payload: parsedPayload,
+            secondaryAction: { type: "none" },
+            score: 120 - index,
+          }];
+        } catch {
+          return [];
+        }
+      });
+
     if (!query) {
       const suggestions: SearchResult[] = [
+        ...historyResults,
         ...quickLaunchItems
           .filter((item) => (item.launchCount || 0) > 0)
           .sort((left, right) => (right.lastLaunchedAt || 0) - (left.lastLaunchedAt || 0))
           .slice(0, 4)
           .map<SearchResult>((item, index) => ({
             id: `suggest-quicklaunch-${item.id}`,
-            icon: item.icon ? "📌" : "📄",
+            icon: item.icon ? "📌" : item.itemType === "folder" ? "📁" : item.itemType === "url" ? "🌐" : item.itemType === "script" ? "🧾" : "📄",
             title: item.alias ? `${item.alias} · ${item.name}` : item.name,
             subtitle: shortenText(item.path, 48),
             meta: "快捷启动",
             group: "最近使用",
+            category: "programs",
             hint: index === 0 ? "Enter" : undefined,
             secondaryHint: "打开模块",
-            payload: { type: "quicklaunch", path: item.path },
+            payload: { type: "quicklaunch", target: item.path, itemType: item.itemType || "app", args: item.args || "" },
             secondaryAction: { type: "open-view", view: "quicklaunch" },
             score: 100 - index,
           })),
@@ -301,50 +490,31 @@ function App() {
             subtitle: shortenText(item.content, 70),
             meta: "复制文本",
             group: "剪贴板收藏",
+            category: "clipboard",
             secondaryHint: "打开模块",
             payload: { type: "clipboard-text", content: item.content },
             secondaryAction: { type: "open-view", view: "clipboard" },
             score: 80 - index,
           })),
-        ...TOOLS.slice(0, 4).map<SearchResult>((tool, index) => ({
-          id: `suggest-tool-${tool.id}`,
-          icon: tool.icon,
-          title: tool.label,
-          subtitle: tool.desc,
-          meta: "工具",
-          group: "常用功能",
-          secondaryHint: tool.kind === "view" ? "打开模块" : undefined,
-          payload: { type: "tool", toolId: tool.id },
-          secondaryAction: createToolSecondaryAction(tool.id),
-          score: 60 - index,
-        })),
+        ...actionResults.slice(0, 4).map((action, index) => ({ ...action, score: 60 - index })),
       ];
 
-      return suggestions.slice(0, 10);
+      return suggestions
+        .filter((result) => commandFilter === "all" || result.category === commandFilter)
+        .slice(0, 12);
     }
 
-    const toolResults: SearchResult[] = TOOLS.filter((tool) =>
-      getSearchScore([tool.label, tool.desc], query) >= 0,
-    ).map((tool) => {
-      const score = getSearchScore([tool.label, tool.desc], query);
-      return {
-        id: `tool-${tool.id}`,
-        icon: tool.icon,
-        title: tool.label,
-        subtitle: tool.desc,
-        meta: "工具",
-        group: "工具",
-        secondaryHint: tool.kind === "view" ? "打开模块" : undefined,
-        payload: { type: "tool", toolId: tool.id },
-        secondaryAction: createToolSecondaryAction(tool.id),
-        score,
-      };
-    });
+    const toolResults: SearchResult[] = [...actionResults]
+      .map((action) => ({
+        ...action,
+        score: getSearchScore([action.title, action.subtitle], query),
+      }))
+      .filter((entry) => entry.score >= 0);
 
     const quickLaunchResults: SearchResult[] = quickLaunchItems
       .map((item) => ({
         item,
-        score: getSearchScore([item.alias || "", item.name, item.path], query),
+        score: getSearchScore([item.alias || "", item.name, item.path, item.args || ""], query),
       }))
       .filter((entry) => entry.score >= 0)
       .sort((left, right) => {
@@ -356,14 +526,15 @@ function App() {
       .slice(0, 5)
       .map(({ item, score }) => ({
         id: `quicklaunch-${item.id}`,
-        icon: item.icon ? "📌" : "📄",
+        icon: item.icon ? "📌" : item.itemType === "folder" ? "📁" : item.itemType === "url" ? "🌐" : item.itemType === "script" ? "🧾" : "📄",
         title: item.alias ? `${item.alias} · ${item.name}` : item.name,
         subtitle: shortenText(item.path, 46),
         meta: "快捷启动",
         group: "程序与别名",
+        category: "programs",
         hint: item.alias ? `@${item.alias}` : undefined,
         secondaryHint: "打开模块",
-        payload: { type: "quicklaunch", path: item.path },
+        payload: { type: "quicklaunch", target: item.path, itemType: item.itemType || "app", args: item.args || "" },
         secondaryAction: { type: "open-view", view: "quicklaunch" },
         score,
       }));
@@ -389,6 +560,7 @@ function App() {
         subtitle: shortenText(item.content, 70),
         meta: item.group === "snippet" ? "代码片段" : "复制文本",
         group: "剪贴板",
+        category: "clipboard",
         hint: item.pinned ? "置顶" : item.favorite ? "收藏" : item.tags?.[0] ? `#${item.tags[0]}` : undefined,
         secondaryHint: "打开模块",
         payload: { type: "clipboard-text", content: item.content },
@@ -411,6 +583,7 @@ function App() {
         subtitle: shortenText(item.content, 70),
         meta: "打开文本管理",
         group: "文本",
+        category: "text",
         payload: { type: "view", view: "textmanager" },
         secondaryAction: { type: "open-view", view: "textmanager" },
         score,
@@ -431,20 +604,22 @@ function App() {
         subtitle: item.completed ? "已完成待办" : "待办事项",
         meta: "打开待办",
         group: "待办",
+        category: "todos",
         payload: { type: "view", view: "todo" },
         secondaryAction: { type: "open-view", view: "todo" },
         score,
       }));
 
-    const groupOrder = ["程序与别名", "工具", "剪贴板", "文本", "待办"];
+    const groupOrder = ["动作", "程序与别名", "剪贴板", "文本", "待办"];
 
-    return [...quickLaunchResults, ...toolResults, ...clipboardResults, ...textResults, ...todoResults]
+    return [...toolResults, ...quickLaunchResults, ...clipboardResults, ...textResults, ...todoResults]
+      .filter((result) => commandFilter === "all" || result.category === commandFilter)
       .sort((left, right) => {
         const groupDelta = groupOrder.indexOf(left.group) - groupOrder.indexOf(right.group);
         return groupDelta || right.score - left.score;
       })
       .slice(0, 12);
-  }, [clipboardSearchItems, commandQuery, quickLaunchSearchItems, textSearchEntries, todoSearchItems]);
+  }, [actionResults, clipboardSearchItems, commandFilter, commandHistory, commandQuery, quickLaunchSearchItems, textSearchEntries, todoSearchItems]);
 
   useEffect(() => {
     if (!isCommandPaletteOpen) {
@@ -477,6 +652,64 @@ function App() {
     setActiveView(tool.view);
   };
 
+  const recordCommandUsage = async (result: SearchResult) => {
+    try {
+      await invoke("upsert_command_history", {
+        entry: {
+          actionKey: result.id,
+          title: result.title,
+          groupName: result.group,
+          icon: result.icon,
+          meta: result.meta || result.subtitle,
+          payloadJson: JSON.stringify(result.payload),
+          lastUsedAt: Date.now(),
+          useCount: 1,
+        },
+      });
+      setCommandHistory((current) => [
+        {
+          actionKey: result.id,
+          title: result.title,
+          groupName: result.group,
+          icon: result.icon,
+          meta: result.meta || result.subtitle,
+          payloadJson: JSON.stringify(result.payload),
+          lastUsedAt: Date.now(),
+          useCount: (current.find((item) => item.actionKey === result.id)?.useCount || 0) + 1,
+        },
+        ...current.filter((item) => item.actionKey !== result.id),
+      ].slice(0, 20));
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleActionCommand = async (actionKey: string) => {
+    if (actionKey === "toggle-desktop") {
+      await handleSwitchClick("desktop");
+      return;
+    }
+    if (actionKey === "toggle-taskbar") {
+      await handleSwitchClick("taskbar");
+      return;
+    }
+    if (actionKey === "clear-clipboard") {
+      await invoke("clear_clipboard_records");
+      notifyToolboxDataChanged("clipboard");
+      await invoke("insert_notification", {
+        notification: {
+          id: `clipboard-clear-${Date.now()}`,
+          level: "success",
+          title: "已清空剪贴板历史",
+          message: "保留了收藏和置顶项",
+          source: "clipboard",
+          createdAt: Date.now(),
+          read: false,
+        },
+      });
+    }
+  };
+
   const handleCommandResultClick = async (result: CommandPaletteResult) => {
     const resolved = commandResults.find((item) => item.id === result.id);
     if (!resolved) return;
@@ -486,12 +719,19 @@ function App() {
     searchInputRef.current?.blur();
 
     try {
+      await recordCommandUsage(resolved);
       switch (resolved.payload.type) {
         case "tool":
           await handleToolClick(resolved.payload.toolId);
           break;
         case "quicklaunch":
-          await invoke("launch_program", { path: resolved.payload.path });
+          await invoke("launch_program", {
+            request: {
+              target: resolved.payload.target,
+              itemType: resolved.payload.itemType,
+              args: resolved.payload.args,
+            },
+          });
           break;
         case "clipboard-text":
           await writeClipboardText(resolved.payload.content);
@@ -502,11 +742,25 @@ function App() {
         case "view":
           setActiveView(resolved.payload.view);
           break;
+        case "action":
+          await handleActionCommand(resolved.payload.actionKey);
+          break;
         default:
           break;
       }
     } catch (error) {
       console.error(error);
+      await invoke("insert_notification", {
+        notification: {
+          id: `command-error-${Date.now()}`,
+          level: "error",
+          title: "命令执行失败",
+          message: String(error),
+          source: "command",
+          createdAt: Date.now(),
+          read: false,
+        },
+      }).catch(console.error);
     }
   };
 
@@ -606,9 +860,30 @@ function App() {
     } catch (error) {
       console.error(error);
       setSwitchStates((current) => ({ ...current, [switchId]: previousValue }));
+      await invoke("insert_notification", {
+        notification: {
+          id: `switch-error-${switchId}-${Date.now()}`,
+          level: "error",
+          title: "系统切换失败",
+          message: String(error),
+          source: "system",
+          createdAt: Date.now(),
+          read: false,
+        },
+      }).catch(console.error);
     } finally {
       setPendingSwitches((current) => ({ ...current, [switchId]: false }));
     }
+  };
+
+  const handleNotificationRead = async (id: string, read: boolean) => {
+    setNotifications((current) => current.map((item) => (item.id === id ? { ...item, read } : item)));
+    await invoke("mark_notification_read", { id, read }).catch(console.error);
+  };
+
+  const handleNotificationClear = async () => {
+    setNotifications([]);
+    await invoke("clear_notification_history").catch(console.error);
   };
 
   const switches: ToggleSwitchItem[] = [
@@ -673,19 +948,36 @@ function App() {
             isCommandPaletteOpen={isCommandPaletteOpen}
             selectedCommandId={selectedCommandId}
             commandResults={commandResults}
+            commandFilter={commandFilter}
+            commandFilters={commandFilters}
+            notifications={notifications}
+            unreadNotificationCount={unreadNotificationCount}
+            isNotificationCenterOpen={isNotificationCenterOpen}
             searchInputRef={searchInputRef}
             onCommandPaletteOpen={openCommandPalette}
             onCommandInputKeyDown={handleCommandInputKeyDown}
             onCommandQueryChange={handleCommandQueryChange}
+            onCommandFilterChange={setCommandFilter}
             onCommandResultHover={setSelectedCommandId}
             onCommandResultClick={handleCommandResultClick}
             onCommandResultSecondaryClick={handleCommandResultSecondaryClick}
+            onNotificationToggle={() => setIsNotificationCenterOpen((current) => !current)}
+            onNotificationRead={handleNotificationRead}
+            onNotificationClear={handleNotificationClear}
             onToolClick={handleToolClick}
             onSwitchClick={handleSwitchClick}
           />
         ) : (
           renderers[activeView]
         )}
+      </div>
+      <div className="app-toast-stack">
+        {toastNotifications.map((notification) => (
+          <div key={notification.id} className={`app-toast ${notification.level}`}>
+            <div className="app-toast-title">{notification.title}</div>
+            <div className="app-toast-message">{notification.message}</div>
+          </div>
+        ))}
       </div>
     </div>
   );

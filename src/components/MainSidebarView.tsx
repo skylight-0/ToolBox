@@ -10,6 +10,17 @@ export type CommandPaletteResult = {
   group: string;
   hint?: string;
   secondaryHint?: string;
+  category?: string;
+};
+
+export type SidebarNotification = {
+  id: string;
+  level: string;
+  title: string;
+  message: string;
+  source: string;
+  createdAt: number;
+  read: boolean;
 };
 
 type MainSidebarViewProps = {
@@ -20,13 +31,22 @@ type MainSidebarViewProps = {
   isCommandPaletteOpen: boolean;
   selectedCommandId: string | null;
   commandResults: CommandPaletteResult[];
+  commandFilter: string;
+  commandFilters: Array<{ id: string; label: string }>;
+  notifications: SidebarNotification[];
+  unreadNotificationCount: number;
+  isNotificationCenterOpen: boolean;
   searchInputRef: RefObject<HTMLInputElement | null>;
   onCommandPaletteOpen: () => void;
   onCommandInputKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   onCommandQueryChange: (value: string) => void;
+  onCommandFilterChange: (filterId: string) => void;
   onCommandResultHover: (resultId: string) => void;
   onCommandResultClick: (result: CommandPaletteResult) => void;
   onCommandResultSecondaryClick: (result: CommandPaletteResult) => void;
+  onNotificationToggle: () => void;
+  onNotificationRead: (id: string, read: boolean) => void;
+  onNotificationClear: () => void;
   onToolClick: (toolId: ToolItem["id"]) => void;
   onSwitchClick: (switchId: ToggleSwitchItem["id"]) => void;
 };
@@ -73,13 +93,22 @@ function MainSidebarView({
   isCommandPaletteOpen,
   selectedCommandId,
   commandResults,
+  commandFilter,
+  commandFilters,
+  notifications,
+  unreadNotificationCount,
+  isNotificationCenterOpen,
   searchInputRef,
   onCommandPaletteOpen,
   onCommandInputKeyDown,
   onCommandQueryChange,
+  onCommandFilterChange,
   onCommandResultHover,
   onCommandResultClick,
   onCommandResultSecondaryClick,
+  onNotificationToggle,
+  onNotificationRead,
+  onNotificationClear,
   onToolClick,
   onSwitchClick,
 }: MainSidebarViewProps) {
@@ -89,9 +118,51 @@ function MainSidebarView({
     <div className="main-view">
       <div className="functional-area">
         <header className="sidebar-header">
-          <div className="time-display">{formatTime(currentTime)}</div>
-          <div className="date-display">{formatDate(currentTime)}</div>
+          <div>
+            <div className="time-display">{formatTime(currentTime)}</div>
+            <div className="date-display">{formatDate(currentTime)}</div>
+          </div>
+          <button className="notification-entry-btn" onClick={onNotificationToggle}>
+            <span>🔔</span>
+            <span>通知</span>
+            {unreadNotificationCount > 0 && (
+              <span className="notification-entry-badge">{unreadNotificationCount}</span>
+            )}
+          </button>
         </header>
+
+        {isNotificationCenterOpen && (
+          <section className="notification-center-card">
+            <div className="notification-center-header">
+              <div className="section-title">
+                <span className="section-icon">🔔</span>
+                通知中心
+              </div>
+              <button className="command-result-secondary" onClick={onNotificationClear}>
+                清空历史
+              </button>
+            </div>
+            <div className="notification-center-list">
+              {notifications.length > 0 ? (
+                notifications.map((notification) => (
+                  <div
+                    key={notification.id}
+                    className={`notification-center-item ${notification.read ? "read" : "unread"} ${notification.level}`}
+                    onClick={() => onNotificationRead(notification.id, true)}
+                  >
+                    <div className="notification-center-top">
+                      <span className="notification-center-title">{notification.title}</span>
+                      <span className="notification-center-source">{notification.source}</span>
+                    </div>
+                    <div className="notification-center-message">{notification.message}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="command-results-empty">暂无通知</div>
+              )}
+            </div>
+          </section>
+        )}
 
         <section className="command-palette-section">
           <div className="section-title">
@@ -129,6 +200,18 @@ function MainSidebarView({
                   <kbd className="command-palette-key">Esc</kbd>
                 </div>
                 <div className="command-results">
+                  <div className="command-filter-row">
+                    {commandFilters.map((filter) => (
+                      <button
+                        key={filter.id}
+                        className={`command-filter-chip ${commandFilter === filter.id ? "active" : ""}`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => onCommandFilterChange(filter.id)}
+                      >
+                        {filter.label}
+                      </button>
+                    ))}
+                  </div>
                   {commandResults.length > 0 ? (
                     <>
                       {commandResults.map((result) => {

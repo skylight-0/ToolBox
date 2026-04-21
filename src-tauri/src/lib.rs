@@ -85,8 +85,13 @@ struct QuickLaunchItemRecord {
     path: String,
     icon: Option<String>,
     alias: Option<String>,
+    #[serde(rename = "itemType")]
+    item_type: Option<String>,
+    args: Option<String>,
     #[serde(rename = "groupId")]
     group_id: Option<String>,
+    #[serde(rename = "sortOrder")]
+    sort_order: Option<i64>,
     #[serde(rename = "launchCount")]
     launch_count: Option<i64>,
     #[serde(rename = "lastLaunchedAt")]
@@ -97,6 +102,55 @@ struct QuickLaunchItemRecord {
 struct QuickLaunchData {
     groups: Vec<QuickLaunchGroupRecord>,
     items: Vec<QuickLaunchItemRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CommandHistoryRecord {
+    #[serde(rename = "actionKey")]
+    action_key: String,
+    title: String,
+    #[serde(rename = "groupName")]
+    group_name: String,
+    icon: String,
+    meta: Option<String>,
+    #[serde(rename = "payloadJson")]
+    payload_json: String,
+    #[serde(rename = "lastUsedAt")]
+    last_used_at: i64,
+    #[serde(rename = "useCount")]
+    use_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AppNotificationRecord {
+    id: String,
+    level: String,
+    title: String,
+    message: String,
+    source: String,
+    #[serde(rename = "createdAt")]
+    created_at: i64,
+    read: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AppNotificationInput {
+    id: String,
+    level: String,
+    title: String,
+    message: String,
+    source: String,
+    #[serde(rename = "createdAt")]
+    created_at: i64,
+    read: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LaunchTargetRequest {
+    target: String,
+    #[serde(rename = "itemType")]
+    item_type: Option<String>,
+    args: Option<String>,
 }
 
 // 获取屏幕尺寸并定位窗口到右侧
@@ -253,7 +307,10 @@ fn init_app_db(path: &PathBuf) -> Result<(), String> {
                 path TEXT NOT NULL,
                 icon TEXT,
                 alias TEXT,
+                item_type TEXT NOT NULL DEFAULT 'app',
+                args TEXT NOT NULL DEFAULT '',
                 group_id TEXT,
+                sort_order INTEGER NOT NULL DEFAULT 0,
                 launch_count INTEGER NOT NULL DEFAULT 0,
                 last_launched_at INTEGER NOT NULL DEFAULT 0
             );
@@ -262,9 +319,59 @@ fn init_app_db(path: &PathBuf) -> Result<(), String> {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS command_history (
+                action_key TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                group_name TEXT NOT NULL,
+                icon TEXT NOT NULL,
+                meta TEXT,
+                payload_json TEXT NOT NULL,
+                last_used_at INTEGER NOT NULL,
+                use_count INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS notification_history (
+                id TEXT PRIMARY KEY,
+                level TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                read INTEGER NOT NULL DEFAULT 0
+            );
             ",
         )
         .map_err(|error| format!("创建应用数据表失败: {}", error))?;
+    connection
+        .execute_batch(
+            "
+            ALTER TABLE quicklaunch_items ADD COLUMN item_type TEXT NOT NULL DEFAULT 'app';
+            ALTER TABLE quicklaunch_items ADD COLUMN args TEXT NOT NULL DEFAULT '';
+            ALTER TABLE quicklaunch_items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+            ",
+        )
+        .ok();
+    Ok(())
+}
+
+fn emit_app_notification<R: tauri::Runtime>(
+    emitter: &impl tauri::Emitter<R>,
+    notification: &AppNotificationRecord,
+) {
+    let _ = emitter.emit("app-notification", notification);
+}
+
+fn trim_notification_history(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM notification_history
+             WHERE id NOT IN (
+               SELECT id FROM notification_history ORDER BY created_at DESC LIMIT 50
+             )",
+            [],
+        )
+        .map_err(|error| format!("裁剪通知历史失败: {}", error))?;
     Ok(())
 }
 
@@ -373,8 +480,8 @@ fn replace_quicklaunch_data(connection: &Connection, data: &QuickLaunchData) -> 
     let mut item_statement = connection
         .prepare(
             "INSERT INTO quicklaunch_items
-             (id, name, path, icon, alias, group_id, launch_count, last_launched_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, name, path, icon, alias, item_type, args, group_id, sort_order, launch_count, last_launched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .map_err(|error| format!("准备保存快捷启动条目失败: {}", error))?;
     for item in &data.items {
@@ -385,13 +492,79 @@ fn replace_quicklaunch_data(connection: &Connection, data: &QuickLaunchData) -> 
                 item.path,
                 item.icon,
                 item.alias,
+                item.item_type.clone().unwrap_or_else(|| "app".to_string()),
+                item.args.clone().unwrap_or_default(),
                 item.group_id,
+                item.sort_order.unwrap_or(0),
                 item.launch_count.unwrap_or(0),
                 item.last_launched_at.unwrap_or(0),
             ])
             .map_err(|error| format!("保存快捷启动条目失败: {}", error))?;
     }
     Ok(())
+}
+
+fn upsert_command_history_record(
+    connection: &Connection,
+    entry: &CommandHistoryRecord,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO command_history
+             (action_key, title, group_name, icon, meta, payload_json, last_used_at, use_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)
+             ON CONFLICT(action_key) DO UPDATE SET
+               title = excluded.title,
+               group_name = excluded.group_name,
+               icon = excluded.icon,
+               meta = excluded.meta,
+               payload_json = excluded.payload_json,
+               last_used_at = excluded.last_used_at,
+               use_count = command_history.use_count + 1",
+            params![
+                entry.action_key,
+                entry.title,
+                entry.group_name,
+                entry.icon,
+                entry.meta,
+                entry.payload_json,
+                entry.last_used_at
+            ],
+        )
+        .map_err(|error| format!("写入命令历史失败: {}", error))?;
+    Ok(())
+}
+
+fn insert_notification_record(
+    connection: &Connection,
+    notification: &AppNotificationInput,
+) -> Result<AppNotificationRecord, String> {
+    connection
+        .execute(
+            "INSERT OR REPLACE INTO notification_history
+             (id, level, title, message, source, created_at, read)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                notification.id,
+                notification.level,
+                notification.title,
+                notification.message,
+                notification.source,
+                notification.created_at,
+                i64::from(notification.read.unwrap_or(false)),
+            ],
+        )
+        .map_err(|error| format!("写入通知历史失败: {}", error))?;
+    trim_notification_history(connection)?;
+    Ok(AppNotificationRecord {
+        id: notification.id.clone(),
+        level: notification.level.clone(),
+        title: notification.title.clone(),
+        message: notification.message.clone(),
+        source: notification.source.clone(),
+        created_at: notification.created_at,
+        read: notification.read.unwrap_or(false),
+    })
 }
 
 #[tauri::command]
@@ -402,8 +575,26 @@ fn save_image_data(path: String, data_url: String) -> Result<(), String> {
 
 // 启动指定路径的程序（快捷访问功能）
 #[tauri::command]
-fn launch_program(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
-    platform::launch_program(window.clone(), path)?;
+fn launch_program(window: tauri::WebviewWindow, request: LaunchTargetRequest) -> Result<(), String> {
+    let result = platform::launch_program(window.clone(), request.clone());
+    if let Err(error) = &result {
+        let notification = AppNotificationInput {
+            id: format!("launch-{}", chrono_like_timestamp()),
+            level: "error".to_string(),
+            title: "启动失败".to_string(),
+            message: error.clone(),
+            source: "quicklaunch".to_string(),
+            created_at: chrono_like_timestamp(),
+            read: Some(false),
+        };
+        let state: State<'_, AppState> = window.state();
+        if let Ok(connection) = open_clipboard_db(&state) {
+            if let Ok(record) = insert_notification_record(&connection, &notification) {
+                emit_app_notification(&window, &record);
+            }
+        }
+    }
+    result?;
     let state: State<'_, AppState> = window.state();
     request_hide_sidebar(&window, &state);
     Ok(())
@@ -638,7 +829,7 @@ fn get_quicklaunch_data(state: State<'_, AppState>) -> Result<QuickLaunchData, S
 
     let mut item_statement = connection
         .prepare(
-            "SELECT id, name, path, icon, alias, group_id, launch_count, last_launched_at
+            "SELECT id, name, path, icon, alias, item_type, args, group_id, sort_order, launch_count, last_launched_at
              FROM quicklaunch_items",
         )
         .map_err(|error| format!("读取快捷启动条目失败: {}", error))?;
@@ -650,7 +841,10 @@ fn get_quicklaunch_data(state: State<'_, AppState>) -> Result<QuickLaunchData, S
                 path: row.get("path")?,
                 icon: row.get("icon")?,
                 alias: row.get("alias")?,
+                item_type: row.get("item_type")?,
+                args: row.get("args")?,
                 group_id: row.get("group_id")?,
+                sort_order: Some(row.get("sort_order")?),
                 launch_count: Some(row.get("launch_count")?),
                 last_launched_at: Some(row.get("last_launched_at")?),
             })
@@ -661,6 +855,107 @@ fn get_quicklaunch_data(state: State<'_, AppState>) -> Result<QuickLaunchData, S
         .map_err(|error| format!("解析快捷启动条目失败: {}", error))?;
 
     Ok(QuickLaunchData { groups, items })
+}
+
+#[tauri::command]
+fn get_command_history(state: State<'_, AppState>) -> Result<Vec<CommandHistoryRecord>, String> {
+    let connection = open_clipboard_db(&state)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT action_key, title, group_name, icon, meta, payload_json, last_used_at, use_count
+             FROM command_history
+             ORDER BY last_used_at DESC
+             LIMIT 20",
+        )
+        .map_err(|error| format!("读取命令历史失败: {}", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(CommandHistoryRecord {
+                action_key: row.get("action_key")?,
+                title: row.get("title")?,
+                group_name: row.get("group_name")?,
+                icon: row.get("icon")?,
+                meta: row.get("meta")?,
+                payload_json: row.get("payload_json")?,
+                last_used_at: row.get("last_used_at")?,
+                use_count: row.get("use_count")?,
+            })
+        })
+        .map_err(|error| format!("查询命令历史失败: {}", error))?;
+    rows.into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析命令历史失败: {}", error))
+}
+
+#[tauri::command]
+fn upsert_command_history(
+    state: State<'_, AppState>,
+    entry: CommandHistoryRecord,
+) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    upsert_command_history_record(&connection, &entry)
+}
+
+#[tauri::command]
+fn get_notification_history(state: State<'_, AppState>) -> Result<Vec<AppNotificationRecord>, String> {
+    let connection = open_clipboard_db(&state)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, level, title, message, source, created_at, read
+             FROM notification_history
+             ORDER BY created_at DESC
+             LIMIT 50",
+        )
+        .map_err(|error| format!("读取通知历史失败: {}", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AppNotificationRecord {
+                id: row.get("id")?,
+                level: row.get("level")?,
+                title: row.get("title")?,
+                message: row.get("message")?,
+                source: row.get("source")?,
+                created_at: row.get("created_at")?,
+                read: row.get::<_, i64>("read")? != 0,
+            })
+        })
+        .map_err(|error| format!("查询通知历史失败: {}", error))?;
+    rows.into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析通知历史失败: {}", error))
+}
+
+#[tauri::command]
+fn insert_notification(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    notification: AppNotificationInput,
+) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    let record = insert_notification_record(&connection, &notification)?;
+    emit_app_notification(&app, &record);
+    Ok(())
+}
+
+#[tauri::command]
+fn mark_notification_read(state: State<'_, AppState>, id: String, read: bool) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    connection
+        .execute(
+            "UPDATE notification_history SET read = ?2 WHERE id = ?1",
+            params![id, i64::from(read)],
+        )
+        .map_err(|error| format!("更新通知状态失败: {}", error))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_notification_history(state: State<'_, AppState>) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    connection
+        .execute("DELETE FROM notification_history", [])
+        .map_err(|error| format!("清空通知历史失败: {}", error))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -775,6 +1070,13 @@ fn resize_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>, widt
     position_window_right(&window, clamped_width);
 }
 
+fn chrono_like_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -825,6 +1127,12 @@ pub fn run() {
             save_text_manager_data,
             get_quicklaunch_data,
             save_quicklaunch_data,
+            get_command_history,
+            upsert_command_history,
+            get_notification_history,
+            insert_notification,
+            mark_notification_read,
+            clear_notification_history,
             get_setting,
             set_setting
         ])
@@ -849,6 +1157,21 @@ pub fn run() {
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
             if let Err(error) = app.global_shortcut().register("Alt+Space") {
                 eprintln!("注册全局快捷键 Alt+Space 失败: {}", error);
+                let state: State<'_, AppState> = app.state();
+                if let Ok(connection) = open_clipboard_db(&state) {
+                    let input = AppNotificationInput {
+                        id: format!("shortcut-{}", chrono_like_timestamp()),
+                        level: "error".to_string(),
+                        title: "快捷键注册失败".to_string(),
+                        message: format!("Alt+Space 注册失败: {}", error),
+                        source: "system".to_string(),
+                        created_at: chrono_like_timestamp(),
+                        read: Some(false),
+                    };
+                    if let Ok(record) = insert_notification_record(&connection, &input) {
+                        emit_app_notification(app, &record);
+                    }
+                }
             }
 
             // 初始隐藏窗口

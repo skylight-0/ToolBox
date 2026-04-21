@@ -2,6 +2,7 @@
 mod windows;
 
 use tauri::WebviewWindow;
+use crate::LaunchTargetRequest;
 
 #[cfg(target_os = "windows")]
 pub fn toggle_desktop(show: bool) -> Result<(), String> {
@@ -24,12 +25,12 @@ pub fn toggle_taskbar(_window: WebviewWindow, _show: bool) -> Result<(), String>
 }
 
 #[cfg(target_os = "windows")]
-pub fn launch_program(window: WebviewWindow, path: String) -> Result<(), String> {
-    windows::launch_program(window, path)
+pub fn launch_program(window: WebviewWindow, request: LaunchTargetRequest) -> Result<(), String> {
+    windows::launch_program(window, request)
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn launch_program(_window: WebviewWindow, _path: String) -> Result<(), String> {
+pub fn launch_program(_window: WebviewWindow, _request: LaunchTargetRequest) -> Result<(), String> {
     Err("仅支持 Windows 平台".to_string())
 }
 
