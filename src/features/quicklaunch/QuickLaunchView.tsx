@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, MutableRefObject } from "react";
 import { notifyToolboxDataChanged } from "../../utils/dataSync";
 
@@ -63,23 +63,37 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
   const [isAddingGroup, setIsAddingGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
+  const quickLaunchGroupsRef = useRef<QuickLaunchGroup[]>([{ id: "default", name: "默认分组" }]);
+  const quickLaunchItemsRef = useRef<QuickLaunchItem[]>([]);
 
   useEffect(() => {
     invoke<{ groups: QuickLaunchGroup[]; items: QuickLaunchItem[] }>("get_quicklaunch_data")
       .then((data) => {
-        setQuickLaunchGroups(
-          data.groups.length ? data.groups : [{ id: "default", name: "默认分组" }],
-        );
-        setQuickLaunchItems(normalizeQuickLaunchItems(data.items));
+        const nextGroups = data.groups.length ? data.groups : [{ id: "default", name: "默认分组" }];
+        const nextItems = normalizeQuickLaunchItems(data.items);
+        quickLaunchGroupsRef.current = nextGroups;
+        quickLaunchItemsRef.current = nextItems;
+        setQuickLaunchGroups(nextGroups);
+        setQuickLaunchItems(nextItems);
       })
       .catch(console.error);
   }, []);
+
+  useEffect(() => {
+    quickLaunchGroupsRef.current = quickLaunchGroups;
+  }, [quickLaunchGroups]);
+
+  useEffect(() => {
+    quickLaunchItemsRef.current = quickLaunchItems;
+  }, [quickLaunchItems]);
 
   const persistQuickLaunchData = (
     nextGroups: QuickLaunchGroup[],
     nextItems: QuickLaunchItem[],
   ) => {
     const normalizedItems = normalizeQuickLaunchItems(nextItems);
+    quickLaunchGroupsRef.current = nextGroups;
+    quickLaunchItemsRef.current = normalizedItems;
     setQuickLaunchGroups(nextGroups);
     setQuickLaunchItems(normalizedItems);
     void invoke("save_quicklaunch_data", {
@@ -155,16 +169,18 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
           lastLaunchedAt: 0,
         };
 
-        persistQuickLaunchData(quickLaunchGroups, [...quickLaunchItems, item]);
+        const nextGroups = quickLaunchGroupsRef.current;
+        const nextItems = [...quickLaunchItemsRef.current, item];
+        persistQuickLaunchData(nextGroups, nextItems);
 
         invoke<string>("extract_program_icon", { path: filePath })
           .then((icon) => {
-            const nextItems = normalizeQuickLaunchItems(
-              quickLaunchItems.map((currentItem) =>
+            const itemsWithIcon = normalizeQuickLaunchItems(
+              quickLaunchItemsRef.current.map((currentItem) =>
                 currentItem.id === id ? { ...currentItem, icon } : currentItem,
               ),
             );
-            persistQuickLaunchData(quickLaunchGroups, nextItems);
+            persistQuickLaunchData(quickLaunchGroupsRef.current, itemsWithIcon);
           })
           .catch(() => {});
       }
