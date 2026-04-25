@@ -13,6 +13,7 @@ export type ToolId = ViewToolId;
 type ToolBase = {
   id: ToolId;
   icon: string;
+  iconSrc?: string;
   label: string;
   desc: string;
 };
@@ -26,6 +27,7 @@ export type ToolItem =
 export type ToggleSwitchItem = {
   id: "desktop" | "taskbar";
   icon: string;
+  iconSrc?: string;
   label: string;
   desc?: string;
   active: boolean;

@@ -295,7 +295,9 @@ function MainSidebarView({
           <div className="tools-grid">
             {tools.map((tool) => (
               <div className="tool-card" key={tool.id} onClick={() => onToolClick(tool.id)}>
-                <div className="tool-icon">{tool.icon}</div>
+                <div className="tool-icon">
+                  {tool.iconSrc ? <img src={tool.iconSrc} alt="" /> : tool.icon}
+                </div>
                 <div className="tool-info">
                   <span className="tool-label">{tool.label}</span>
                   <span className="tool-desc">{tool.desc}</span>
@@ -319,7 +321,9 @@ function MainSidebarView({
               onClick={() => !item.pending && onSwitchClick(item.id)}
             >
               <div className="content-left">
-                <div className="switch-icon">{item.icon}</div>
+                <div className="switch-icon">
+                  {item.iconSrc ? <img src={item.iconSrc} alt="" /> : item.icon}
+                </div>
                 <div className="switch-info">
                   <div className="switch-label">{item.label}</div>
                   {item.desc && <div className="switch-desc">{item.desc}</div>}

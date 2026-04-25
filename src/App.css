@@ -3426,6 +3426,13 @@ body,
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 6px 12px rgba(37, 99, 235, 0.2);
 }
 
+.tool-icon img {
+  width: 22px;
+  height: 22px;
+  display: block;
+  filter: brightness(0) invert(1);
+}
+
 .tool-card:nth-child(1) .tool-icon {
   background: linear-gradient(135deg, #7c3aed, #4f46e5);
 }
@@ -3533,6 +3540,15 @@ body,
   opacity: 0.9;
   text-align: center;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.switch-icon img {
+  width: 20px;
+  height: 20px;
+  display: block;
 }
 
 .switch-card:hover .switch-icon {

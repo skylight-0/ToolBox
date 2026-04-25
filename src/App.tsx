@@ -6,6 +6,8 @@ import "./App.css";
 import MainSidebarView from "./components/MainSidebarView";
 import type { CommandPaletteResult, SidebarNotification } from "./components/MainSidebarView";
 import { TOOLS } from "./constants/sidebar";
+import desktopIcon from "./assets/icon.svg";
+import taskbarIcon from "./assets/task.svg";
 import ClipboardView from "./features/clipboard/ClipboardView";
 import { getClipboardSearchFields, type ClipboardItem as ClipboardSearchItem, normalizeClipboardItems } from "./features/clipboard/clipboardModel";
 import JsonToolView from "./features/json/JsonToolView";
@@ -890,6 +892,7 @@ function App() {
     {
       id: "desktop",
       icon: "👁️",
+      iconSrc: desktopIcon,
       label: "桌面图标",
       desc: "切换桌面图标显示状态",
       active: switchStates.desktop,
@@ -898,6 +901,7 @@ function App() {
     {
       id: "taskbar",
       icon: "🚀",
+      iconSrc: taskbarIcon,
       label: "任务栏",
       desc: "切换任务栏显示状态",
       active: switchStates.taskbar,
