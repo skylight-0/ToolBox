@@ -185,9 +185,18 @@ function MainSidebarView({
             <kbd className="command-palette-key">Ctrl + K</kbd>
           </div>
           {isCommandPaletteOpen && (
-            <div className="command-palette-overlay" onMouseDown={(event) => event.preventDefault()}>
+            <div
+              className="command-palette-overlay"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+            >
               <div className="command-palette-backdrop" />
-              <div className="command-palette-modal">
+              <div
+                className="command-palette-modal"
+                onMouseDown={(event) => event.stopPropagation()}
+              >
                 <div className="command-palette-shell">
                   <span className="command-palette-search-icon">⌕</span>
                   <input

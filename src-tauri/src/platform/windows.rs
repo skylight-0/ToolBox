@@ -1,11 +1,22 @@
-use std::process::Command;
+use std::{
+    ffi::OsStr,
+    iter::once,
+    os::windows::ffi::OsStrExt,
+    path::Path,
+    process::Command,
+};
 
 use tauri::WebviewWindow;
 use windows::{
     core::{w, PCWSTR},
     Win32::{
         Foundation::HWND,
-        UI::WindowsAndMessaging::{FindWindowExW, FindWindowW, ShowWindow, SW_HIDE, SW_SHOWNA},
+        UI::{
+            Shell::ShellExecuteW,
+            WindowsAndMessaging::{
+                FindWindowExW, FindWindowW, ShowWindow, SW_HIDE, SW_SHOWNA, SW_SHOWNORMAL,
+            },
+        },
     },
 };
 use crate::LaunchTargetRequest;
@@ -100,22 +111,82 @@ fn run_hidden_powershell(script: &str) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn to_wide(value: impl AsRef<OsStr>) -> Vec<u16> {
+    value.as_ref().encode_wide().chain(once(0)).collect()
+}
+
+fn is_url_target(target: &str) -> bool {
+    let lower = target.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("file://")
+        || lower.starts_with("mailto:")
+}
+
+fn shell_execute_error_message(code: isize, target: &str) -> String {
+    let reason = match code {
+        0 | 8 => "系统内存不足",
+        2 => "找不到指定文件",
+        3 => "找不到指定路径",
+        5 => "没有访问权限",
+        11 => "目标文件格式无效",
+        26 => "共享冲突",
+        27 => "文件关联不完整或无效",
+        28 => "DDE 请求超时",
+        29 => "DDE 请求失败",
+        30 => "DDE 服务正忙",
+        31 => "没有可用于打开该目标的关联程序",
+        32 => "找不到必要的动态链接库",
+        _ => "系统拒绝打开目标",
+    };
+    format!("启动目标失败: {} ({})", reason, target)
+}
+
 pub fn launch_program(_window: WebviewWindow, request: LaunchTargetRequest) -> Result<(), String> {
-    let mut cmd = Command::new("cmd");
     let item_type = request.item_type.unwrap_or_else(|| "app".to_string());
-    let mut command = format!("start \"\" \"{}\"", request.target.replace('"', "\"\""));
-    if matches!(item_type.as_str(), "app" | "script") && request.args.as_deref().unwrap_or("").trim().len() > 0 {
-        command.push(' ');
-        command.push_str(request.args.as_deref().unwrap_or("").trim());
+    let target = request.target.trim();
+    if target.is_empty() {
+        return Err("启动目标为空".to_string());
     }
-    cmd.args(["/c", &command]);
 
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    let args = request.args.as_deref().unwrap_or("").trim();
+    let target_wide = to_wide(target);
+    let params_wide = if matches!(item_type.as_str(), "app" | "script") && !args.is_empty() {
+        Some(to_wide(args))
+    } else {
+        None
+    };
+    let directory_wide = if is_url_target(target) || item_type == "folder" {
+        None
+    } else {
+        Path::new(target).parent().map(to_wide)
+    };
 
-    cmd.spawn().map_err(|e| format!("启动目标失败: {}", e))?;
-    Ok(())
+    let params = params_wide
+        .as_ref()
+        .map(|value| PCWSTR(value.as_ptr()))
+        .unwrap_or_else(PCWSTR::null);
+    let directory = directory_wide
+        .as_ref()
+        .map(|value| PCWSTR(value.as_ptr()))
+        .unwrap_or_else(PCWSTR::null);
+
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            PCWSTR(target_wide.as_ptr()),
+            params,
+            directory,
+            SW_SHOWNORMAL,
+        )
+    };
+    let code = result.0 as isize;
+    if code <= 32 {
+        Err(shell_execute_error_message(code, target))
+    } else {
+        Ok(())
+    }
 }
 
 pub async fn extract_program_icon(path: String) -> Result<String, String> {

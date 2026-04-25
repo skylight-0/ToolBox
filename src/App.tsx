@@ -150,6 +150,7 @@ function App() {
 
   const sidebarRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const isCommandPaletteOpenRef = useRef(false);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
@@ -291,7 +292,19 @@ function App() {
   }, []);
 
   useEffect(() => {
+    isCommandPaletteOpenRef.current = isCommandPaletteOpen;
+  }, [isCommandPaletteOpen]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && isCommandPaletteOpenRef.current) {
+        event.preventDefault();
+        setCommandQuery("");
+        setIsCommandPaletteOpen(false);
+        searchInputRef.current?.blur();
+        return;
+      }
+
       if (event.ctrlKey && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setActiveView("main");
@@ -836,12 +849,9 @@ function App() {
 
     if (event.key === "Escape") {
       event.preventDefault();
-      if (commandQuery) {
-        setCommandQuery("");
-      } else {
-        setIsCommandPaletteOpen(false);
-        searchInputRef.current?.blur();
-      }
+      setCommandQuery("");
+      setIsCommandPaletteOpen(false);
+      searchInputRef.current?.blur();
     }
   };
 

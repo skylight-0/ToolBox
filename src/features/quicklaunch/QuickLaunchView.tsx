@@ -584,40 +584,6 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
             </button>
           </div>
 
-          {!searchKeyword && activeMode === "group" && recentItems.length > 0 && (
-            <div className="quicklaunch-recent-section">
-              <div className="section-title">
-                <span className="section-icon">🕘</span>
-                最近使用
-              </div>
-              <div className="quicklaunch-recent-list">
-                {recentItems.map((item) => (
-                  <div
-                    key={`recent-${item.id}`}
-                    className="quicklaunch-recent-item"
-                    onClick={() => launchProgram(item)}
-                    title={item.path}
-                  >
-                    <div className="quicklaunch-recent-left">
-                      <span className="quicklaunch-recent-icon">
-                        {item.icon ? "📌" : getDefaultIcon(item.itemType || "app")}
-                      </span>
-                      <div className="quicklaunch-recent-info">
-                        <div className="quicklaunch-recent-name">
-                          {item.alias ? `${item.alias} · ${item.name}` : item.name}
-                        </div>
-                        <div className="quicklaunch-recent-meta">
-                          最近启动：{formatRecentTime(item.lastLaunchedAt)}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="quicklaunch-recent-count">{item.launchCount} 次</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {visibleItems.length === 0 ? (
             <div className="quicklaunch-empty">当前视图没有匹配项目</div>
           ) : (
