@@ -27,6 +27,7 @@ export type ToggleSwitchItem = {
   id: "desktop" | "taskbar";
   icon: string;
   label: string;
+  desc?: string;
   active: boolean;
   pending?: boolean;
 };

@@ -167,20 +167,21 @@ fn resolve_target_monitor(window: &tauri::WebviewWindow) -> Option<Monitor> {
 fn position_window_right(window: &tauri::WebviewWindow, width: u32) {
     if let Some(monitor) = resolve_target_monitor(window) {
         let scale_factor = monitor.scale_factor();
-        let screen_size = monitor.size().to_logical::<f64>(scale_factor);
-        let screen_pos = monitor.position().to_logical::<f64>(scale_factor);
+        let work_area = monitor.work_area();
+        let work_size = work_area.size.to_logical::<f64>(scale_factor);
+        let work_pos = work_area.position.to_logical::<f64>(scale_factor);
 
-        let screen_height = screen_size.height;
-        let screen_width = screen_size.width;
+        let work_height = work_size.height;
+        let work_width = work_size.width;
 
-        // 窗口定位到鼠标所在屏幕右侧 (前端传来的 width 是逻辑/CSS像素)
-        let logical_width = width as f64;
-        let x = screen_pos.x + (screen_width - logical_width);
-        let y = screen_pos.y;
+        // 使用工作区定位，避免覆盖任务栏或其他系统保留区域。
+        let logical_width = (width as f64).min(work_width);
+        let x = work_pos.x + (work_width - logical_width);
+        let y = work_pos.y;
 
         let _ = window.set_size(Size::Logical(LogicalSize::new(
             logical_width,
-            screen_height,
+            work_height,
         )));
         let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
     }

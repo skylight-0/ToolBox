@@ -118,17 +118,28 @@ function MainSidebarView({
     <div className="main-view">
       <div className="functional-area">
         <header className="sidebar-header">
-          <div>
-            <div className="time-display">{formatTime(currentTime)}</div>
-            <div className="date-display">{formatDate(currentTime)}</div>
+          <div className="brand-block">
+            <div className="brand-icon" aria-hidden="true">✦</div>
+            <div className="brand-copy">
+              <div className="brand-title">工具中心</div>
+              <div className="brand-subtitle">
+                {formatDate(currentTime)} · {formatTime(currentTime)}
+              </div>
+            </div>
           </div>
-          <button className="notification-entry-btn" onClick={onNotificationToggle}>
-            <span>🔔</span>
-            <span>通知</span>
-            {unreadNotificationCount > 0 && (
-              <span className="notification-entry-badge">{unreadNotificationCount}</span>
-            )}
-          </button>
+          <div className="sidebar-actions">
+            <button
+              className="notification-entry-btn"
+              onClick={onNotificationToggle}
+              title="通知中心"
+              aria-label="通知中心"
+            >
+              <span>🔔</span>
+              {unreadNotificationCount > 0 && (
+                <span className="notification-entry-badge">{unreadNotificationCount}</span>
+              )}
+            </button>
+          </div>
         </header>
 
         {isNotificationCenterOpen && (
@@ -293,19 +304,6 @@ function MainSidebarView({
             ))}
           </div>
         </section>
-
-        <section className="shortcuts-section">
-          <h2 className="section-title">
-            <span className="section-icon">⌨️</span>
-            快捷键
-          </h2>
-          <div className="shortcut-list">
-            <div className="shortcut-item">
-              <span className="shortcut-label">显示/隐藏</span>
-              <kbd className="shortcut-key">Alt + Space</kbd>
-            </div>
-          </div>
-        </section>
       </div>
 
       <div className="switches-area">
@@ -322,7 +320,10 @@ function MainSidebarView({
             >
               <div className="content-left">
                 <div className="switch-icon">{item.icon}</div>
-                <div className="switch-label">{item.label}</div>
+                <div className="switch-info">
+                  <div className="switch-label">{item.label}</div>
+                  {item.desc && <div className="switch-desc">{item.desc}</div>}
+                </div>
               </div>
               <div className="switch-toggle-track">
                 <div className="switch-toggle-thumb" />
