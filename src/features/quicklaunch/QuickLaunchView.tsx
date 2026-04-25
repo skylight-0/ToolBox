@@ -54,16 +54,16 @@ function normalizeQuickLaunchItems(items: QuickLaunchItem[]) {
   }));
 }
 
-function formatRecentTime(timestamp?: number) {
-  if (!timestamp) return "未启动过";
-  const date = new Date(timestamp);
-  return date.toLocaleDateString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+// function formatRecentTime(timestamp?: number) {
+//   if (!timestamp) return "未启动过";
+//   const date = new Date(timestamp);
+//   return date.toLocaleDateString("zh-CN", {
+//     month: "2-digit",
+//     day: "2-digit",
+//     hour: "2-digit",
+//     minute: "2-digit",
+//   });
+// }
 
 function getDefaultIcon(itemType: QuickLaunchItemType) {
   if (itemType === "folder") return "📁";
@@ -394,14 +394,14 @@ function QuickLaunchView({ onBack, isDialogOpenRef }: QuickLaunchViewProps) {
     });
   }, [activeGroupItems, activeMode, quickLaunchItems, searchKeyword]);
 
-  const recentItems = useMemo(
-    () =>
-      [...quickLaunchItems]
-        .filter((item) => (item.launchCount || 0) > 0)
-        .sort((left, right) => (right.lastLaunchedAt || 0) - (left.lastLaunchedAt || 0))
-        .slice(0, 5),
-    [quickLaunchItems],
-  );
+  // const recentItems = useMemo(
+  //   () =>
+  //     [...quickLaunchItems]
+  //       .filter((item) => (item.launchCount || 0) > 0)
+  //       .sort((left, right) => (right.lastLaunchedAt || 0) - (left.lastLaunchedAt || 0))
+  //       .slice(0, 5),
+  //   [quickLaunchItems],
+  // );
 
   const handleItemDragStart = (itemId: string) => {
     setDraggingItemId(itemId);
