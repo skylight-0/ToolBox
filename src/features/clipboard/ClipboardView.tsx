@@ -525,20 +525,26 @@ function ClipboardView({
                   )}
                 </div>
                 <div className="clipboard-item-footer">
-                  <span className="clipboard-item-time">{formatClipboardTime(item.timestamp)}</span>
-                  <span className="clipboard-item-type">
-                    {item.type === "text" ? "文本" : "图片"}
-                  </span>
-                  {item.pinned && <span className="clipboard-item-badge pinned">置顶</span>}
-                  {item.favorite && <span className="clipboard-item-badge favorite">收藏</span>}
-                  {item.group === "snippet" && (
-                    <span className="clipboard-item-badge snippet">代码片段</span>
-                  )}
-                  {(item.tags || []).map((tag) => (
-                    <span key={`${item.id}-${tag}`} className="clipboard-tag-chip">
-                      #{tag}
+                  <div className="clipboard-item-meta">
+                    <span className="clipboard-item-time">{formatClipboardTime(item.timestamp)}</span>
+                    <span className="clipboard-item-type">
+                      {item.type === "text" ? "文本" : "图片"}
                     </span>
-                  ))}
+                    {item.pinned && <span className="clipboard-item-badge pinned">置顶</span>}
+                    {item.favorite && <span className="clipboard-item-badge favorite">收藏</span>}
+                    {item.group === "snippet" && (
+                      <span className="clipboard-item-badge snippet">代码</span>
+                    )}
+                  </div>
+                  {(item.tags || []).length > 0 && (
+                    <div className="clipboard-item-tags">
+                      {(item.tags || []).map((tag) => (
+                        <span key={`${item.id}-${tag}`} className="clipboard-tag-chip">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="clipboard-item-actions">
                     {item.type === "text" && (
                       <button
