@@ -5,13 +5,16 @@ import SubViewHeader from "../../components/SubViewHeader";
 import {
   type ClipboardGroup,
   type ClipboardItem,
-  type ClipboardRecordInput,
   getClipboardSearchFields,
   normalizeClipboardItems,
 } from "./clipboardModel";
+import { notifyToolboxDataChanged, TOOLBOX_DATA_CHANGED } from "../../utils/dataSync";
 
 type ClipboardViewProps = {
   onBack: () => void;
+  isMonitoring: boolean;
+  onMonitoringChange: (value: boolean | ((current: boolean) => boolean)) => void;
+  onClipboardContentWritten: (content: string) => void;
 };
 
 type ClipboardFilter = "all" | "pinned" | "favorites" | "snippets" | "text" | "image";
@@ -51,10 +54,6 @@ function normalizeTagInput(value: string) {
     .filter(Boolean);
 }
 
-function isCodeSnippet(content: string) {
-  return /```|;|\bconst\b|\blet\b|\bfunction\b|\bclass\b|<\/?[a-z][\s\S]*>/i.test(content);
-}
-
 function getTextStats(content: string) {
   return {
     chars: content.length,
@@ -90,11 +89,15 @@ function getHighlightedSnippetHtml(content: string) {
     );
 }
 
-function ClipboardView({ onBack }: ClipboardViewProps) {
+function ClipboardView({
+  onBack,
+  isMonitoring,
+  onMonitoringChange,
+  onClipboardContentWritten,
+}: ClipboardViewProps) {
   const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>([]);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [activeFilter, setActiveFilter] = useState<ClipboardFilter>("all");
-  const [isMonitoring, setIsMonitoring] = useState(true);
   const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
@@ -102,7 +105,6 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
   const [tagDraft, setTagDraft] = useState("");
   const isDraggingPreview = useRef(false);
   const dragStartPreview = useRef({ x: 0, y: 0 });
-  const lastClipboardContent = useRef<string>("");
 
   const refreshClipboardHistory = async () => {
     try {
@@ -119,77 +121,16 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
   }, []);
 
   useEffect(() => {
-    if (!isMonitoring) return;
-
-    const insertRecord = async (record: ClipboardRecordInput) => {
-      await invoke("insert_clipboard_record", { record });
-      await refreshClipboardHistory();
+    const handleDataChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ kind?: string }>).detail;
+      if (!detail?.kind || detail.kind === "clipboard") {
+        void refreshClipboardHistory();
+      }
     };
 
-    const checkClipboard = async () => {
-      try {
-        const { readText, readImage } = await import("@tauri-apps/plugin-clipboard-manager");
-
-        let newText = "";
-        try {
-          newText = (await readText()) || "";
-        } catch {}
-
-        if (newText && newText !== lastClipboardContent.current) {
-          lastClipboardContent.current = newText;
-          await insertRecord({
-            id: crypto.randomUUID(),
-            type: "text",
-            content: newText.slice(0, 10000),
-            timestamp: Date.now(),
-            favorite: false,
-            pinned: false,
-            tags: [],
-            group: isCodeSnippet(newText) ? "snippet" : "general",
-          });
-        }
-
-        try {
-          const imageData = await readImage();
-          if (!imageData) return;
-
-          const rgba = await imageData.rgba();
-          const size = await imageData.size();
-          const bytes = new Uint8Array(rgba);
-          const canvas = document.createElement("canvas");
-          canvas.width = size.width;
-          canvas.height = size.height;
-          const ctx = canvas.getContext("2d");
-
-          if (!ctx) return;
-
-          const imgData = ctx.createImageData(size.width, size.height);
-          imgData.data.set(bytes);
-          ctx.putImageData(imgData, 0, 0);
-          const imageContent = canvas.toDataURL("image/png");
-
-          if (imageContent !== lastClipboardContent.current) {
-            lastClipboardContent.current = imageContent;
-            await insertRecord({
-              id: crypto.randomUUID(),
-              type: "image",
-              content: imageContent,
-              timestamp: Date.now(),
-              favorite: false,
-              pinned: false,
-              tags: [],
-              group: "general",
-            });
-          }
-        } catch {}
-      } catch {}
-    };
-
-    const interval = window.setInterval(() => {
-      void checkClipboard();
-    }, 800);
-    return () => clearInterval(interval);
-  }, [isMonitoring]);
+    window.addEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
+    return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
+  }, []);
 
   const visibleItems = useMemo(() => {
     const searchTerms = getSearchTerms(searchKeyword);
@@ -246,18 +187,19 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
       group: changes.group,
     });
     await refreshClipboardHistory();
+    notifyToolboxDataChanged("clipboard");
   };
 
   const copyToClipboard = async (item: ClipboardItem) => {
     try {
       if (item.type === "text") {
         await writeClipboardText(item.content);
-        lastClipboardContent.current = item.content;
+        onClipboardContentWritten(item.content);
         return;
       }
 
       await writeClipboardImage(item.content);
-      lastClipboardContent.current = item.content;
+      onClipboardContentWritten(item.content);
     } catch {}
   };
 
@@ -274,7 +216,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
 
     try {
       await writeClipboardText(item.content);
-      lastClipboardContent.current = item.content;
+      onClipboardContentWritten(item.content);
     } catch {}
   };
 
@@ -317,6 +259,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     try {
       await invoke("delete_clipboard_record", { id });
       await refreshClipboardHistory();
+      notifyToolboxDataChanged("clipboard");
     } catch (error) {
       console.error(error);
     }
@@ -326,6 +269,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     try {
       await invoke("clear_clipboard_records");
       await refreshClipboardHistory();
+      notifyToolboxDataChanged("clipboard");
     } catch (error) {
       console.error(error);
     }
@@ -391,7 +335,7 @@ function ClipboardView({ onBack }: ClipboardViewProps) {
     <div className="clipboard-header-actions">
       <button
         className={`clipboard-monitor-btn ${isMonitoring ? "active" : ""}`}
-        onClick={() => setIsMonitoring((current) => !current)}
+        onClick={() => onMonitoringChange((current) => !current)}
         title={isMonitoring ? "点击暂停监控" : "点击开始监控"}
       >
         {isMonitoring ? "⏸️ 监控中" : "▶️ 已暂停"}

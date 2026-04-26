@@ -24,6 +24,10 @@ export type ClipboardRecordInput = {
   group?: ClipboardGroup;
 };
 
+export function isCodeSnippet(content: string) {
+  return /```|;|\bconst\b|\blet\b|\bfunction\b|\bclass\b|<\/?[a-z][\s\S]*>/i.test(content);
+}
+
 function normalizeTags(tags: string[] | undefined) {
   if (!Array.isArray(tags)) return [];
   return Array.from(

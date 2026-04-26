@@ -631,8 +631,29 @@ fn get_clipboard_history(state: State<'_, AppState>) -> Result<Vec<ClipboardReco
 fn insert_clipboard_record(
     state: State<'_, AppState>,
     record: ClipboardRecordInput,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let connection = open_clipboard_db(&state)?;
+    let latest_record = connection
+        .query_row(
+            "SELECT type, content
+             FROM clipboard_history
+             ORDER BY timestamp DESC
+             LIMIT 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("读取最新剪贴板记录失败: {}", error))?;
+
+    if latest_record
+        .as_ref()
+        .is_some_and(|(record_type, content)| {
+            record_type == &record.record_type && content == &record.content
+        })
+    {
+        return Ok(false);
+    }
+
     let tags = normalize_tags(record.tags);
     connection
         .execute(
@@ -650,7 +671,7 @@ fn insert_clipboard_record(
             ],
         )
         .map_err(|error| format!("保存剪贴板记录失败: {}", error))?;
-    Ok(())
+    Ok(true)
 }
 
 #[tauri::command]

@@ -1,4 +1,5 @@
 import type { KeyboardEvent, RefObject } from "react";
+import notificationIcon from "../assets/alter.svg";
 import type { ToggleSwitchItem, ToolItem } from "../types/sidebar";
 
 export type CommandPaletteResult = {
@@ -134,7 +135,7 @@ function MainSidebarView({
               title="通知中心"
               aria-label="通知中心"
             >
-              <span>🔔</span>
+              <img className="notification-entry-icon" src={notificationIcon} alt="" aria-hidden="true" />
               {unreadNotificationCount > 0 && (
                 <span className="notification-entry-badge">{unreadNotificationCount}</span>
               )}
@@ -146,7 +147,7 @@ function MainSidebarView({
           <section className="notification-center-card">
             <div className="notification-center-header">
               <div className="section-title">
-                <span className="section-icon">🔔</span>
+                <img className="section-icon notification-section-icon" src={notificationIcon} alt="" aria-hidden="true" />
                 通知中心
               </div>
               <button className="command-result-secondary" onClick={onNotificationClear}>

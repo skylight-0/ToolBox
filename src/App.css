@@ -1169,21 +1169,22 @@ body,
 
 .todo-input {
   flex: 1;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--border-card);
+  background: var(--todo-input-bg);
+  border: 1px solid var(--todo-input-border);
   border-radius: var(--radius-md);
   padding: 10px 14px;
   color: var(--text-primary);
   font-family: inherit;
   font-size: 14px;
   transition: all 0.2s;
-  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--todo-input-shadow);
 }
 
 .todo-input:focus {
   outline: none;
-  border-color: var(--accent-color);
-  background: rgba(0, 0, 0, 0.35);
+  border-color: var(--todo-input-border);
+  background: var(--todo-input-bg-focus);
+  box-shadow: var(--todo-input-shadow);
 }
 
 .todo-add-btn {
@@ -1571,17 +1572,21 @@ body,
 
 .quicklaunch-search-input {
   width: 100%;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--quicklaunch-search-bg);
+  border: 1px solid var(--quicklaunch-search-border);
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 13px;
   padding: 12px 14px;
   outline: none;
+  box-shadow: var(--quicklaunch-search-shadow);
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
 
 .quicklaunch-search-input:focus {
-  border-color: var(--accent-color);
+  border-color: var(--quicklaunch-search-border);
+  background: var(--quicklaunch-search-bg-focus);
+  box-shadow: var(--quicklaunch-search-shadow);
 }
 
 .quicklaunch-recent-section {
@@ -2423,17 +2428,21 @@ body,
 
 .clipboard-search-input {
   width: 100%;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--clipboard-search-bg);
+  border: 1px solid var(--clipboard-search-border);
   border-radius: var(--radius-md);
   color: var(--text-primary);
   font-size: 13px;
   padding: 12px 14px;
   outline: none;
+  box-shadow: var(--clipboard-search-shadow);
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
 
 .clipboard-search-input:focus {
-  border-color: var(--accent-color);
+  border-color: var(--clipboard-search-border);
+  background: var(--clipboard-search-bg-focus);
+  box-shadow: var(--clipboard-search-shadow);
 }
 
 .clipboard-filter-row {
@@ -2937,6 +2946,18 @@ body,
   --accent-color-hover: #1d5fe8;
   --accent-color-active: #184dbd;
   --accent-glow: rgba(37, 99, 235, 0.26);
+  --todo-input-bg: rgba(255, 255, 255, 0.95);
+  --todo-input-bg-focus: rgba(255, 255, 255, 0.95);
+  --todo-input-border: rgba(82, 104, 139, 0.22);
+  --todo-input-shadow: 0 18px 42px rgba(31, 44, 68, 0.2);
+  --quicklaunch-search-bg: rgba(255, 255, 255, 0.95);
+  --quicklaunch-search-bg-focus: rgba(255, 255, 255, 0.95);
+  --quicklaunch-search-border: rgba(82, 104, 139, 0.22);
+  --quicklaunch-search-shadow: 0 18px 42px rgba(31, 44, 68, 0.2);
+  --clipboard-search-bg: rgba(255, 255, 255, 0.95);
+  --clipboard-search-bg-focus: rgba(255, 255, 255, 0.95);
+  --clipboard-search-border: rgba(82, 104, 139, 0.22);
+  --clipboard-search-shadow: 0 18px 42px rgba(31, 44, 68, 0.2);
   --border-glass: 1px solid rgba(104, 132, 171, 0.42);
   --border-subtle: rgba(76, 96, 130, 0.15);
   --border-card: rgba(76, 96, 130, 0.16);
@@ -3141,6 +3162,13 @@ body,
   transform: scale(0.96);
 }
 
+.notification-entry-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  flex-shrink: 0;
+}
+
 .notification-entry-badge {
   position: absolute;
   top: -3px;
@@ -3167,6 +3195,14 @@ body,
 
 .section-icon {
   display: none;
+}
+
+.notification-section-icon {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex-shrink: 0;
+  opacity: 0.8;
 }
 
 .command-palette-section {

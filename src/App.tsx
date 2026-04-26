@@ -9,7 +9,13 @@ import { TOOLS } from "./constants/sidebar";
 import desktopIcon from "./assets/icon.svg";
 import taskbarIcon from "./assets/task.svg";
 import ClipboardView from "./features/clipboard/ClipboardView";
-import { getClipboardSearchFields, type ClipboardItem as ClipboardSearchItem, normalizeClipboardItems } from "./features/clipboard/clipboardModel";
+import {
+  getClipboardSearchFields,
+  isCodeSnippet,
+  type ClipboardItem as ClipboardSearchItem,
+  type ClipboardRecordInput,
+  normalizeClipboardItems,
+} from "./features/clipboard/clipboardModel";
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
@@ -118,6 +124,30 @@ async function writeClipboardImage(dataUrl: string) {
   await writeImage(bytes);
 }
 
+async function readClipboardImageAsDataUrl(readImage: () => Promise<unknown>) {
+  const imageData = await readImage();
+  if (!imageData || typeof imageData !== "object") return "";
+
+  const image = imageData as {
+    rgba: () => Promise<ArrayBuffer | Uint8Array | number[]>;
+    size: () => Promise<{ width: number; height: number }>;
+  };
+  const rgba = await image.rgba();
+  const size = await image.size();
+  const bytes = new Uint8Array(rgba as ArrayBuffer);
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) return "";
+
+  const imgData = ctx.createImageData(size.width, size.height);
+  imgData.data.set(bytes);
+  ctx.putImageData(imgData, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
 function App() {
   const [sidebarWidth, setSidebarWidth] = useState(400);
   const [previewWidth, setPreviewWidth] = useState<number | null>(null);
@@ -131,6 +161,7 @@ function App() {
   const [commandFilter, setCommandFilter] = useState("all");
   const [quickLaunchSearchItems, setQuickLaunchSearchItems] = useState<QuickLaunchSearchItem[]>([]);
   const [clipboardSearchItems, setClipboardSearchItems] = useState<ClipboardSearchItem[]>([]);
+  const [isClipboardMonitoring, setIsClipboardMonitoring] = useState(true);
   const [textSearchEntries, setTextSearchEntries] = useState<TextEntrySearchItem[]>([]);
   const [todoSearchItems, setTodoSearchItems] = useState<TodoSearchItem[]>([]);
   const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>([]);
@@ -156,6 +187,8 @@ function App() {
   const dragStartWidth = useRef(0);
   const previewWidthRef = useRef<number | null>(null);
   const isDialogOpenRef = useRef(false);
+  const lastClipboardContentRef = useRef("");
+  const clipboardCheckInFlightRef = useRef(false);
   const commandFilters = [
     { id: "all", label: "全部" },
     { id: "actions", label: "动作" },
@@ -341,6 +374,70 @@ function App() {
     window.addEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
     return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
   }, []);
+
+  useEffect(() => {
+    if (!isClipboardMonitoring) return;
+
+    const insertRecord = async (record: ClipboardRecordInput) => {
+      const inserted = await invoke<boolean>("insert_clipboard_record", { record });
+      if (inserted) {
+        notifyToolboxDataChanged("clipboard");
+      }
+    };
+
+    const checkClipboard = async () => {
+      if (clipboardCheckInFlightRef.current) return;
+      clipboardCheckInFlightRef.current = true;
+
+      try {
+        const { readText, readImage } = await import("@tauri-apps/plugin-clipboard-manager");
+
+        try {
+          const newText = (await readText()) || "";
+          if (newText && newText !== lastClipboardContentRef.current) {
+            lastClipboardContentRef.current = newText;
+            await insertRecord({
+              id: crypto.randomUUID(),
+              type: "text",
+              content: newText.slice(0, 10000),
+              timestamp: Date.now(),
+              favorite: false,
+              pinned: false,
+              tags: [],
+              group: isCodeSnippet(newText) ? "snippet" : "general",
+            });
+          }
+        } catch {}
+
+        try {
+          const imageContent = await readClipboardImageAsDataUrl(readImage);
+          if (imageContent && imageContent !== lastClipboardContentRef.current) {
+            lastClipboardContentRef.current = imageContent;
+            await insertRecord({
+              id: crypto.randomUUID(),
+              type: "image",
+              content: imageContent,
+              timestamp: Date.now(),
+              favorite: false,
+              pinned: false,
+              tags: [],
+              group: "general",
+            });
+          }
+        } catch {}
+      } catch (error) {
+        console.error(error);
+      } finally {
+        clipboardCheckInFlightRef.current = false;
+      }
+    };
+
+    void checkClipboard();
+    const interval = window.setInterval(() => {
+      void checkClipboard();
+    }, 350);
+    return () => clearInterval(interval);
+  }, [isClipboardMonitoring]);
 
   const actionResults = useMemo<SearchResult[]>(() => {
     const actions: SearchResult[] = [
@@ -750,9 +847,11 @@ function App() {
           break;
         case "clipboard-text":
           await writeClipboardText(resolved.payload.content);
+          lastClipboardContentRef.current = resolved.payload.content;
           break;
         case "clipboard-image":
           await writeClipboardImage(resolved.payload.content);
+          lastClipboardContentRef.current = resolved.payload.content;
           break;
         case "view":
           setActiveView(resolved.payload.view);
@@ -922,7 +1021,16 @@ function App() {
   const renderers: Record<ViewToolId, ReactNode> = {
     json: <JsonToolView onBack={() => setActiveView("main")} />,
     todo: <TodoView onBack={() => setActiveView("main")} />,
-    clipboard: <ClipboardView onBack={() => setActiveView("main")} />,
+    clipboard: (
+      <ClipboardView
+        onBack={() => setActiveView("main")}
+        isMonitoring={isClipboardMonitoring}
+        onMonitoringChange={setIsClipboardMonitoring}
+        onClipboardContentWritten={(content) => {
+          lastClipboardContentRef.current = content;
+        }}
+      />
+    ),
     textmanager: <TextManagerView onBack={() => setActiveView("main")} />,
     quicklaunch: (
       <QuickLaunchView
