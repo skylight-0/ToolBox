@@ -8,6 +8,7 @@ import type { CommandPaletteResult, SidebarNotification } from "./components/Mai
 import { TOOLS } from "./constants/sidebar";
 import desktopIcon from "./assets/icon.svg";
 import taskbarIcon from "./assets/task.svg";
+import CodecToolView from "./features/codec/CodecToolView";
 import ClipboardView from "./features/clipboard/ClipboardView";
 import {
   getClipboardSearchFields,
@@ -525,6 +526,18 @@ function App() {
 
   const actionResults = useMemo<SearchResult[]>(() => {
     const actions: SearchResult[] = [
+      {
+        id: "action-open-codec",
+        icon: "🔁",
+        title: "打开编码转换",
+        subtitle: "Base64 与 URL 编码解码",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "codec" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
       {
         id: "action-open-clipboard",
         icon: "📋",
@@ -1133,6 +1146,7 @@ function App() {
 
   const renderers: Record<ViewToolId, ReactNode> = {
     json: <JsonToolView onBack={() => setActiveView("main")} />,
+    codec: <CodecToolView onBack={() => setActiveView("main")} />,
     todo: <TodoView onBack={() => setActiveView("main")} />,
     clipboard: (
       <ClipboardView

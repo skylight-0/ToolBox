@@ -1,6 +1,7 @@
 export type ActiveView =
   | "main"
   | "json"
+  | "codec"
   | "todo"
   | "clipboard"
   | "quicklaunch"
