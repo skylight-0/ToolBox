@@ -1893,6 +1893,18 @@ body,
 
 .textmanager-main-header {
   align-items: flex-start;
+  gap: 12px;
+}
+
+.textmanager-main-header > div {
+  min-width: 0;
+}
+
+.textmanager-main-header .active-group-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .textmanager-subtitle {
@@ -1926,7 +1938,7 @@ body,
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: minmax(180px, 34%) minmax(0, 1fr);
   gap: 16px;
   padding: 16px 24px 24px;
 }
@@ -1942,6 +1954,7 @@ body,
 .textmanager-list-panel {
   overflow-y: auto;
   padding: 10px;
+  min-width: 0;
 }
 
 .textmanager-list {
@@ -2024,6 +2037,7 @@ body,
   flex-direction: column;
   gap: 12px;
   padding: 16px;
+  min-width: 0;
 }
 
 .textmanager-editor-actions {
@@ -2059,6 +2073,148 @@ body,
 .textmanager-textarea {
   min-height: 320px;
   resize: none;
+}
+
+@media (max-width: 520px) {
+  .sub-view.textmanager-split-view {
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .textmanager-split-view .sub-view-sidebar {
+    width: 100%;
+    max-height: 118px;
+    flex-shrink: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    box-shadow: none;
+  }
+
+  .textmanager-split-view .sub-view-sidebar-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px 8px;
+  }
+
+  .textmanager-split-view .sub-view-sidebar-header .back-btn {
+    margin-left: 0;
+    flex-shrink: 0;
+  }
+
+  .textmanager-split-view .sub-view-sidebar-header .sub-view-title {
+    margin: 0;
+    font-size: 13px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .textmanager-split-view .quicklaunch-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 10px 10px;
+    gap: 6px;
+  }
+
+  .textmanager-split-view .quicklaunch-nav-item {
+    flex: 0 0 auto;
+    max-width: 128px;
+    min-height: 32px;
+    padding: 6px 10px;
+  }
+
+  .textmanager-split-view .quicklaunch-nav-item.add-btn {
+    margin-top: 0;
+  }
+
+  .textmanager-main {
+    flex: 1;
+    min-height: 0;
+    padding: 0 12px;
+  }
+
+  .textmanager-main-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 8px;
+    padding: 12px 0;
+    align-items: center;
+  }
+
+  .textmanager-main-header > div {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .textmanager-main-header .active-group-title {
+    display: block;
+    min-width: 0;
+    font-size: 16px;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .textmanager-subtitle {
+    display: none;
+  }
+
+  .textmanager-main .add-program-btn {
+    align-self: center;
+    padding: 6px 9px;
+    white-space: nowrap;
+  }
+
+  .textmanager-toolbar {
+    padding: 12px 0 0;
+  }
+
+  .textmanager-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(120px, 34%) minmax(220px, 1fr);
+    gap: 10px;
+    padding: 12px 0;
+    overflow: hidden;
+  }
+
+  .textmanager-list-panel,
+  .textmanager-editor-panel {
+    border-radius: var(--radius-md);
+  }
+
+  .textmanager-list-panel {
+    padding: 8px;
+  }
+
+  .textmanager-list {
+    gap: 8px;
+  }
+
+  .textmanager-item {
+    padding: 10px;
+  }
+
+  .textmanager-item-preview {
+    -webkit-line-clamp: 2;
+  }
+
+  .textmanager-editor-panel {
+    padding: 12px;
+  }
+
+  .textmanager-title-input {
+    font-size: 14px;
+    padding: 10px 12px;
+  }
+
+  .textmanager-textarea {
+    min-height: 180px;
+  }
 }
 
 .textmanager-empty,
@@ -3939,4 +4095,62 @@ body,
 
 .textmanager-main .add-program-btn:hover {
   background: var(--accent-color-hover);
+}
+
+@media (max-width: 520px) {
+  .sub-view.textmanager-split-view {
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .textmanager-split-view .sub-view-sidebar {
+    width: 100%;
+    max-height: 118px;
+    flex-shrink: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    box-shadow: none;
+  }
+
+  .textmanager-main {
+    flex: 1;
+    min-height: 0;
+    padding: 0 12px;
+  }
+
+  .textmanager-main-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 8px;
+    padding: 12px 0;
+    align-items: center;
+  }
+
+  .textmanager-main-header > div,
+  .textmanager-main-header .active-group-title {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .textmanager-main-header .active-group-title {
+    display: block;
+    font-size: 16px;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .textmanager-main .add-program-btn {
+    align-self: center;
+    padding: 6px 9px;
+    white-space: nowrap;
+  }
+
+  .textmanager-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(120px, 34%) minmax(220px, 1fr);
+    gap: 10px;
+    padding: 12px 0;
+    overflow: hidden;
+  }
 }
