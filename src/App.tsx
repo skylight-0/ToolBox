@@ -184,6 +184,7 @@ function App() {
 
   const sidebarRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const activeViewRef = useRef<ActiveView>("main");
   const isCommandPaletteOpenRef = useRef(false);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
@@ -332,6 +333,10 @@ function App() {
   }, [activeView]);
 
   useEffect(() => {
+    activeViewRef.current = activeView;
+  }, [activeView]);
+
+  useEffect(() => {
     isCommandPaletteOpenRef.current = isCommandPaletteOpen;
   }, [isCommandPaletteOpen]);
 
@@ -342,6 +347,12 @@ function App() {
         setCommandQuery("");
         setIsCommandPaletteOpen(false);
         searchInputRef.current?.blur();
+        return;
+      }
+
+      if (event.key === "Escape" && activeViewRef.current !== "main") {
+        event.preventDefault();
+        setActiveView("main");
         return;
       }
 
