@@ -18,6 +18,7 @@ type ClipboardViewProps = {
 };
 
 type ClipboardFilter = "all" | "pinned" | "favorites" | "snippets" | "text" | "image";
+type ClipboardDateFilter = "today" | "yesterday" | "last7" | "custom" | "all";
 
 async function writeClipboardText(content: string) {
   const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
@@ -52,6 +53,48 @@ function normalizeTagInput(value: string) {
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
+}
+
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getStartOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function getStartOfDateKey(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  if (!year || !month || !day) return getStartOfLocalDay(new Date());
+  return new Date(year, month - 1, day).getTime();
+}
+
+function isInDateFilter(timestamp: number, filter: ClipboardDateFilter, customDate: string) {
+  if (filter === "all") return true;
+
+  const now = new Date();
+  const todayStart = getStartOfLocalDay(now);
+  const tomorrowStart = todayStart + 24 * 60 * 60 * 1000;
+
+  if (filter === "today") {
+    return timestamp >= todayStart && timestamp < tomorrowStart;
+  }
+
+  if (filter === "yesterday") {
+    const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
+    return timestamp >= yesterdayStart && timestamp < todayStart;
+  }
+
+  if (filter === "last7") {
+    const rangeStart = todayStart - 6 * 24 * 60 * 60 * 1000;
+    return timestamp >= rangeStart && timestamp < tomorrowStart;
+  }
+
+  const customStart = getStartOfDateKey(customDate);
+  return timestamp >= customStart && timestamp < customStart + 24 * 60 * 60 * 1000;
 }
 
 function getTextStats(content: string) {
@@ -98,6 +141,9 @@ function ClipboardView({
   const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>([]);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [activeFilter, setActiveFilter] = useState<ClipboardFilter>("all");
+  const [dateFilter, setDateFilter] = useState<ClipboardDateFilter>("today");
+  const [customDate, setCustomDate] = useState(getLocalDateKey);
+  const [isDateMenuOpen, setIsDateMenuOpen] = useState(false);
   const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
@@ -105,6 +151,7 @@ function ClipboardView({
   const [tagDraft, setTagDraft] = useState("");
   const isDraggingPreview = useRef(false);
   const dragStartPreview = useRef({ x: 0, y: 0 });
+  const dateMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshClipboardHistory = async () => {
     try {
@@ -132,10 +179,27 @@ function ClipboardView({
     return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
   }, []);
 
+  useEffect(() => {
+    if (!isDateMenuOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (dateMenuRef.current?.contains(event.target as Node)) return;
+      setIsDateMenuOpen(false);
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    return () => window.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [isDateMenuOpen]);
+
+  const dateScopedItems = useMemo(
+    () => clipboardHistory.filter((item) => isInDateFilter(item.timestamp, dateFilter, customDate)),
+    [clipboardHistory, customDate, dateFilter],
+  );
+
   const visibleItems = useMemo(() => {
     const searchTerms = getSearchTerms(searchKeyword);
 
-    return clipboardHistory
+    return dateScopedItems
       .filter((item) => {
         if (activeFilter === "pinned" && !item.pinned) return false;
         if (activeFilter === "favorites" && !item.favorite) return false;
@@ -152,17 +216,17 @@ function ClipboardView({
         if (!left.pinned && right.pinned) return 1;
         return right.timestamp - left.timestamp;
       });
-  }, [activeFilter, clipboardHistory, searchKeyword]);
+  }, [activeFilter, dateScopedItems, searchKeyword]);
 
   const summary = useMemo(
     () => ({
-      total: clipboardHistory.length,
-      pinned: clipboardHistory.filter((item) => item.pinned).length,
-      favorites: clipboardHistory.filter((item) => item.favorite).length,
-      snippets: clipboardHistory.filter((item) => item.group === "snippet").length,
-      tags: new Set(clipboardHistory.flatMap((item) => item.tags || [])).size,
+      total: dateScopedItems.length,
+      pinned: dateScopedItems.filter((item) => item.pinned).length,
+      favorites: dateScopedItems.filter((item) => item.favorite).length,
+      snippets: dateScopedItems.filter((item) => item.group === "snippet").length,
+      tags: new Set(dateScopedItems.flatMap((item) => item.tags || [])).size,
     }),
-    [clipboardHistory],
+    [dateScopedItems],
   );
 
   const previewTextStats = useMemo(
@@ -353,12 +417,58 @@ function ClipboardView({
       <SubViewHeader title="剪切板增强" onBack={onBack} actions={actions} />
       <div className="sub-view-content clipboard-container">
         <div className="clipboard-toolbar">
-          <input
-            className="clipboard-search-input"
-            placeholder="搜索内容、标签、分组或状态，例如 api 收藏 置顶"
-            value={searchKeyword}
-            onChange={(event) => setSearchKeyword(event.target.value)}
-          />
+          <div className="clipboard-search-row">
+            <input
+              className="clipboard-search-input"
+              placeholder="搜索内容、标签、分组或状态，例如 api 收藏 置顶"
+              value={searchKeyword}
+              onChange={(event) => setSearchKeyword(event.target.value)}
+            />
+            <div className="clipboard-date-menu" ref={dateMenuRef}>
+              <button
+                className={`clipboard-date-trigger ${dateFilter !== "today" ? "active" : ""}`}
+                onClick={() => setIsDateMenuOpen((current) => !current)}
+                title="日期筛选"
+                aria-haspopup="menu"
+                aria-expanded={isDateMenuOpen}
+              >
+                日期
+              </button>
+              {isDateMenuOpen && (
+                <div className="clipboard-date-menu-panel" role="menu">
+                  {[
+                    { id: "today", label: "今天" },
+                    { id: "yesterday", label: "昨天" },
+                    { id: "last7", label: "最近 7 天" },
+                    { id: "all", label: "全部" },
+                  ].map((option) => (
+                    <button
+                      key={option.id}
+                      className={`clipboard-date-option ${dateFilter === option.id ? "active" : ""}`}
+                      onClick={() => {
+                        setDateFilter(option.id as ClipboardDateFilter);
+                        setIsDateMenuOpen(false);
+                      }}
+                      role="menuitem"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                  <label className="clipboard-date-custom">
+                    <span>指定日期</span>
+                    <input
+                      type="date"
+                      value={customDate}
+                      onChange={(event) => {
+                        setCustomDate(event.target.value || getLocalDateKey());
+                        setDateFilter("custom");
+                      }}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+          </div>
           <div className="clipboard-filter-row">
             {filters.map((filter) => (
               <button

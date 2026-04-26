@@ -2426,7 +2426,16 @@ body,
   gap: 10px;
 }
 
+.clipboard-search-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  position: relative;
+}
+
 .clipboard-search-input {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   background: var(--clipboard-search-bg);
   border: 1px solid var(--clipboard-search-border);
@@ -2443,6 +2452,83 @@ body,
   border-color: var(--clipboard-search-border);
   background: var(--clipboard-search-bg-focus);
   box-shadow: var(--clipboard-search-shadow);
+}
+
+.clipboard-date-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.clipboard-date-trigger {
+  height: 100%;
+  min-height: 43px;
+  border: 1px solid var(--clipboard-search-border);
+  border-radius: var(--radius-md);
+  background: var(--clipboard-search-bg);
+  color: var(--text-secondary);
+  box-shadow: var(--clipboard-search-shadow);
+  padding: 0 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.clipboard-date-trigger:hover,
+.clipboard-date-trigger.active {
+  color: var(--accent-color);
+  border-color: var(--border-card-hover);
+}
+
+.clipboard-date-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 180px;
+  padding: 8px;
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 14px 34px rgba(31, 44, 68, 0.18);
+  z-index: 20;
+}
+
+.clipboard-date-option {
+  width: 100%;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.clipboard-date-option:hover,
+.clipboard-date-option.active {
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--accent-color);
+}
+
+.clipboard-date-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.clipboard-date-custom input {
+  width: 100%;
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  background: rgba(248, 250, 252, 0.9);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
 }
 
 .clipboard-filter-row {

@@ -83,6 +83,9 @@ type ToastNotification = SidebarNotification & {
   visible: boolean;
 };
 
+const CLIPBOARD_TEXT_POLL_INTERVAL = 500;
+const CLIPBOARD_IMAGE_POLL_INTERVAL = 2000;
+
 function getSearchScore(fields: string[], query: string) {
   if (!query) return 0;
 
@@ -189,6 +192,7 @@ function App() {
   const isDialogOpenRef = useRef(false);
   const lastClipboardContentRef = useRef("");
   const clipboardCheckInFlightRef = useRef(false);
+  const lastClipboardImageCheckAtRef = useRef(0);
   const commandFilters = [
     { id: "all", label: "全部" },
     { id: "actions", label: "动作" },
@@ -320,9 +324,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (activeView !== "main") return;
+
+    setCurrentTime(new Date());
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [activeView]);
 
   useEffect(() => {
     isCommandPaletteOpenRef.current = isCommandPaletteOpen;
@@ -350,26 +357,56 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const loadQuickLaunchSearchData = () =>
+      invoke<{ groups: QuickLaunchSearchItem[]; items: QuickLaunchSearchItem[] }>("get_quicklaunch_data")
+        .then((data) => setQuickLaunchSearchItems(data.items || []));
+
+    const loadClipboardSearchData = () =>
+      invoke<ClipboardSearchItem[]>("get_clipboard_history")
+        .then((data) => setClipboardSearchItems(normalizeClipboardItems(data)));
+
+    const loadTextSearchData = () =>
+      invoke<{ groups: unknown[]; entries: TextEntrySearchItem[] }>("get_text_manager_data")
+        .then((data) => setTextSearchEntries(data.entries || []));
+
+    const loadTodoSearchData = () =>
+      invoke<TodoSearchItem[]>("get_todos")
+        .then((data) => setTodoSearchItems(data || []));
+
     const loadUnifiedSearchData = () => {
       void Promise.all([
-        invoke<{ groups: QuickLaunchSearchItem[]; items: QuickLaunchSearchItem[] }>("get_quicklaunch_data"),
-        invoke<ClipboardSearchItem[]>("get_clipboard_history"),
-        invoke<{ groups: unknown[]; entries: TextEntrySearchItem[] }>("get_text_manager_data"),
-        invoke<TodoSearchItem[]>("get_todos"),
-      ])
-        .then(([quicklaunchData, clipboardData, textData, todoData]) => {
-          setQuickLaunchSearchItems(quicklaunchData.items || []);
-          setClipboardSearchItems(normalizeClipboardItems(clipboardData));
-          setTextSearchEntries(textData.entries || []);
-          setTodoSearchItems(todoData || []);
-        })
-        .catch(console.error);
+        loadQuickLaunchSearchData(),
+        loadClipboardSearchData(),
+        loadTextSearchData(),
+        loadTodoSearchData(),
+      ]).catch(console.error);
     };
 
     loadUnifiedSearchData();
-    const handleDataChanged = () => {
+    const handleDataChanged = (event: Event) => {
+      const kind = (event as CustomEvent<{ kind?: string }>).detail?.kind;
+
+      if (kind === "clipboard") {
+        void loadClipboardSearchData().catch(console.error);
+        return;
+      }
+      if (kind === "quicklaunch") {
+        void loadQuickLaunchSearchData().catch(console.error);
+        return;
+      }
+      if (kind === "textmanager") {
+        void loadTextSearchData().catch(console.error);
+        return;
+      }
+      if (kind === "todos") {
+        void loadTodoSearchData().catch(console.error);
+        return;
+      }
+
       loadUnifiedSearchData();
-      loadMetaData();
+      if (kind === "notifications") {
+        loadMetaData();
+      }
     };
     window.addEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
     return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
@@ -392,10 +429,14 @@ function App() {
       try {
         const { readText, readImage } = await import("@tauri-apps/plugin-clipboard-manager");
 
+        let hasReadableText = false;
+        let insertedText = false;
         try {
           const newText = (await readText()) || "";
+          hasReadableText = newText.length > 0;
           if (newText && newText !== lastClipboardContentRef.current) {
             lastClipboardContentRef.current = newText;
+            insertedText = true;
             await insertRecord({
               id: crypto.randomUUID(),
               type: "text",
@@ -408,6 +449,18 @@ function App() {
             });
           }
         } catch {}
+
+        const now = Date.now();
+        if (
+          insertedText ||
+          (hasReadableText && now - lastClipboardImageCheckAtRef.current < CLIPBOARD_IMAGE_POLL_INTERVAL)
+        ) {
+          return;
+        }
+        if (now - lastClipboardImageCheckAtRef.current < CLIPBOARD_IMAGE_POLL_INTERVAL) {
+          return;
+        }
+        lastClipboardImageCheckAtRef.current = now;
 
         try {
           const imageContent = await readClipboardImageAsDataUrl(readImage);
@@ -435,7 +488,7 @@ function App() {
     void checkClipboard();
     const interval = window.setInterval(() => {
       void checkClipboard();
-    }, 350);
+    }, CLIPBOARD_TEXT_POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [isClipboardMonitoring]);
 
