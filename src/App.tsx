@@ -19,6 +19,8 @@ import {
 import JsonToolView from "./features/json/JsonToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
+import SettingsView from "./features/settings/SettingsView";
+import type { ClipboardDefaultDateFilter } from "./features/settings/SettingsView";
 import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
 import { notifyToolboxDataChanged, TOOLBOX_DATA_CHANGED } from "./utils/dataSync";
@@ -165,6 +167,7 @@ function App() {
   const [quickLaunchSearchItems, setQuickLaunchSearchItems] = useState<QuickLaunchSearchItem[]>([]);
   const [clipboardSearchItems, setClipboardSearchItems] = useState<ClipboardSearchItem[]>([]);
   const [isClipboardMonitoring, setIsClipboardMonitoring] = useState(true);
+  const [clipboardDefaultDateFilter, setClipboardDefaultDateFilter] = useState<ClipboardDefaultDateFilter>("today");
   const [textSearchEntries, setTextSearchEntries] = useState<TextEntrySearchItem[]>([]);
   const [todoSearchItems, setTodoSearchItems] = useState<TodoSearchItem[]>([]);
   const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>([]);
@@ -292,6 +295,23 @@ function App() {
 
   useEffect(() => {
     loadMetaData();
+    void Promise.all([
+      invoke<string | null>("get_setting", { key: "clipboard_monitoring" }),
+      invoke<string | null>("get_setting", { key: "clipboard_default_date_filter" }),
+    ])
+      .then(([monitoringValue, dateFilterValue]) => {
+        if (monitoringValue === "false") {
+          setIsClipboardMonitoring(false);
+        }
+        if (
+          dateFilterValue === "today" ||
+          dateFilterValue === "last7" ||
+          dateFilterValue === "all"
+        ) {
+          setClipboardDefaultDateFilter(dateFilterValue);
+        }
+      })
+      .catch(console.error);
     const unlistenAppNotification = listen<SidebarNotification>("app-notification", (event) => {
       const notification = event.payload;
       setNotifications((current) => [notification, ...current.filter((item) => item.id !== notification.id)].slice(0, 50));
@@ -566,6 +586,18 @@ function App() {
         score: 40,
       },
       {
+        id: "action-open-settings",
+        icon: "⚙️",
+        title: "打开设置",
+        subtitle: "进入设置页面",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "settings" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
         id: "action-toggle-desktop",
         icon: "👁️",
         title: switchStates.desktop ? "隐藏桌面图标" : "显示桌面图标",
@@ -819,6 +851,23 @@ function App() {
     document.body.style.cursor = "ew-resize";
     document.body.style.userSelect = "none";
     event.preventDefault();
+  };
+
+  const updateSidebarWidth = (width: number) => {
+    const nextWidth = Math.max(280, Math.min(1200, Math.round(width)));
+    setSidebarWidth(nextWidth);
+    void invoke("resize_sidebar", { width: nextWidth }).catch(console.error);
+  };
+
+  const updateClipboardMonitoring = (value: boolean | ((current: boolean) => boolean)) => {
+    setIsClipboardMonitoring((current) => {
+      const next = typeof value === "function" ? value(current) : value;
+      void invoke("set_setting", {
+        key: "clipboard_monitoring",
+        value: next ? "true" : "false",
+      }).catch(console.error);
+      return next;
+    });
   };
 
   const handleToolClick = async (toolId: ToolId) => {
@@ -1089,7 +1138,8 @@ function App() {
       <ClipboardView
         onBack={() => setActiveView("main")}
         isMonitoring={isClipboardMonitoring}
-        onMonitoringChange={setIsClipboardMonitoring}
+        defaultDateFilter={clipboardDefaultDateFilter}
+        onMonitoringChange={updateClipboardMonitoring}
         onClipboardContentWritten={(content) => {
           lastClipboardContentRef.current = content;
         }}
@@ -1103,6 +1153,17 @@ function App() {
       />
     ),
     pomodoro: <PomodoroView onBack={() => setActiveView("main")} />,
+    settings: (
+      <SettingsView
+        onBack={() => setActiveView("main")}
+        sidebarWidth={sidebarWidth}
+        clipboardMonitoring={isClipboardMonitoring}
+        clipboardDefaultDateFilter={clipboardDefaultDateFilter}
+        onSidebarWidthChange={updateSidebarWidth}
+        onClipboardMonitoringChange={updateClipboardMonitoring}
+        onClipboardDefaultDateFilterChange={setClipboardDefaultDateFilter}
+      />
+    ),
   };
 
   return (

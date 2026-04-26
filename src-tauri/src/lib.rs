@@ -1021,6 +1021,30 @@ fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Result
     Ok(())
 }
 
+#[tauri::command]
+fn get_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|error| format!("读取开机自启状态失败: {}", error))
+}
+
+#[tauri::command]
+fn set_autostart_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enabled {
+        manager
+            .enable()
+            .map_err(|error| format!("启用开机自启失败: {}", error))?;
+    } else {
+        manager
+            .disable()
+            .map_err(|error| format!("关闭开机自启失败: {}", error))?;
+    }
+    Ok(())
+}
+
 // 供前端或底部托盘和快捷键统一调用的侧边栏切换逻辑
 fn show_sidebar_window(app_handle: &tauri::AppHandle, state: &State<'_, AppState>) {
     if let Some(window) = app_handle.get_webview_window("main") {
@@ -1156,7 +1180,9 @@ pub fn run() {
             mark_notification_read,
             clear_notification_history,
             get_setting,
-            set_setting
+            set_setting,
+            get_autostart_enabled,
+            set_autostart_enabled
         ])
         .setup(|app| {
             let app_data_dir = app

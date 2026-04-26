@@ -8,11 +8,13 @@ import {
   getClipboardSearchFields,
   normalizeClipboardItems,
 } from "./clipboardModel";
+import type { ClipboardDefaultDateFilter } from "../settings/SettingsView";
 import { notifyToolboxDataChanged, TOOLBOX_DATA_CHANGED } from "../../utils/dataSync";
 
 type ClipboardViewProps = {
   onBack: () => void;
   isMonitoring: boolean;
+  defaultDateFilter: ClipboardDefaultDateFilter;
   onMonitoringChange: (value: boolean | ((current: boolean) => boolean)) => void;
   onClipboardContentWritten: (content: string) => void;
 };
@@ -135,13 +137,14 @@ function getHighlightedSnippetHtml(content: string) {
 function ClipboardView({
   onBack,
   isMonitoring,
+  defaultDateFilter,
   onMonitoringChange,
   onClipboardContentWritten,
 }: ClipboardViewProps) {
   const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>([]);
   const [searchKeyword, setSearchKeyword] = useState("");
   const [activeFilter, setActiveFilter] = useState<ClipboardFilter>("all");
-  const [dateFilter, setDateFilter] = useState<ClipboardDateFilter>("today");
+  const [dateFilter, setDateFilter] = useState<ClipboardDateFilter>(defaultDateFilter);
   const [customDate, setCustomDate] = useState(getLocalDateKey);
   const [isDateMenuOpen, setIsDateMenuOpen] = useState(false);
   const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null);
@@ -166,6 +169,10 @@ function ClipboardView({
   useEffect(() => {
     void refreshClipboardHistory();
   }, []);
+
+  useEffect(() => {
+    setDateFilter(defaultDateFilter);
+  }, [defaultDateFilter]);
 
   useEffect(() => {
     const handleDataChanged = (event: Event) => {

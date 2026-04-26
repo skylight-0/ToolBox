@@ -5,7 +5,8 @@ export type ActiveView =
   | "clipboard"
   | "quicklaunch"
   | "textmanager"
-  | "pomodoro";
+  | "pomodoro"
+  | "settings";
 
 export type ViewToolId = Exclude<ActiveView, "main">;
 export type ToolId = ViewToolId;
