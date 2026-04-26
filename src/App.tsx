@@ -18,10 +18,13 @@ import {
   normalizeClipboardItems,
 } from "./features/clipboard/clipboardModel";
 import JsonToolView from "./features/json/JsonToolView";
+import NetworkToolView from "./features/network/NetworkToolView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
+import QrCodeView from "./features/qrcode/QrCodeView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
 import SettingsView from "./features/settings/SettingsView";
 import type { ClipboardDefaultDateFilter } from "./features/settings/SettingsView";
+import SystemInfoView from "./features/systeminfo/SystemInfoView";
 import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
 import { notifyToolboxDataChanged, TOOLBOX_DATA_CHANGED } from "./utils/dataSync";
@@ -535,6 +538,42 @@ function App() {
         group: "动作",
         category: "actions",
         payload: { type: "view", view: "codec" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-qrcode",
+        icon: "▦",
+        title: "打开二维码生成器",
+        subtitle: "把文本或链接生成二维码",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "qrcode" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-systeminfo",
+        icon: "▥",
+        title: "打开本机信息",
+        subtitle: "查看 CPU、内存、磁盘与网络",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "systeminfo" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-network",
+        icon: "◌",
+        title: "打开网络小工具",
+        subtitle: "DNS 解析、Ping 与端口检测",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "network" },
         secondaryAction: { type: "none" },
         score: 40,
       },
@@ -1147,6 +1186,9 @@ function App() {
   const renderers: Record<ViewToolId, ReactNode> = {
     json: <JsonToolView onBack={() => setActiveView("main")} />,
     codec: <CodecToolView onBack={() => setActiveView("main")} />,
+    qrcode: <QrCodeView onBack={() => setActiveView("main")} />,
+    systeminfo: <SystemInfoView onBack={() => setActiveView("main")} />,
+    network: <NetworkToolView onBack={() => setActiveView("main")} />,
     todo: <TodoView onBack={() => setActiveView("main")} />,
     clipboard: (
       <ClipboardView

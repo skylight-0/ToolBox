@@ -1,8 +1,12 @@
 use std::fs;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sysinfo::{Disks, Networks, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use tauri::{
     LogicalPosition, LogicalSize, Manager, Monitor, Position, Size, State,
 };
@@ -151,6 +155,135 @@ struct LaunchTargetRequest {
     #[serde(rename = "itemType")]
     item_type: Option<String>,
     args: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemInfoSnapshot {
+    collected_at: i64,
+    os: SystemOsInfo,
+    cpu: SystemCpuInfo,
+    memory: SystemMemoryInfo,
+    disk_summary: SystemDiskSummary,
+    disks: Vec<SystemDiskInfo>,
+    networks: Vec<SystemNetworkInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemOsInfo {
+    name: Option<String>,
+    version: Option<String>,
+    long_version: Option<String>,
+    kernel_version: Option<String>,
+    host_name: Option<String>,
+    architecture: String,
+    uptime_seconds: u64,
+    boot_time: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemCpuInfo {
+    brand: String,
+    vendor: String,
+    physical_core_count: Option<usize>,
+    logical_core_count: usize,
+    frequency_mhz: u64,
+    usage_percent: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemMemoryInfo {
+    total: u64,
+    used: u64,
+    available: u64,
+    free: u64,
+    total_swap: u64,
+    used_swap: u64,
+    free_swap: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemDiskSummary {
+    total: u64,
+    used: u64,
+    available: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemDiskInfo {
+    name: String,
+    mount_point: String,
+    file_system: String,
+    kind: String,
+    total: u64,
+    available: u64,
+    used: u64,
+    is_removable: bool,
+    is_read_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemNetworkInfo {
+    name: String,
+    mac_address: String,
+    ip_addresses: Vec<String>,
+    received: u64,
+    transmitted: u64,
+    packets_received: u64,
+    packets_transmitted: u64,
+    mtu: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TcpPortCheckRequest {
+    host: String,
+    port: u16,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TcpPortCheckResult {
+    host: String,
+    port: u16,
+    reachable: bool,
+    resolved_address: Option<String>,
+    duration_ms: u128,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DnsLookupResult {
+    host: String,
+    addresses: Vec<String>,
+    duration_ms: u128,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PingRequest {
+    host: String,
+    count: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PingResult {
+    host: String,
+    success: bool,
+    exit_code: Option<i32>,
+    duration_ms: u128,
+    packet_loss_percent: Option<f32>,
+    average_ms: Option<f32>,
+    output: String,
 }
 
 // 获取屏幕尺寸并定位窗口到右侧
@@ -1123,6 +1256,325 @@ fn chrono_like_timestamp() -> i64 {
         .unwrap_or(0)
 }
 
+#[tauri::command]
+fn get_system_info() -> Result<SystemInfoSnapshot, String> {
+    let mut system = System::new_all();
+    std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
+    system.refresh_cpu_usage();
+    system.refresh_memory();
+
+    let cpu = system.cpus().first();
+    let disks = Disks::new_with_refreshed_list();
+    let networks = Networks::new_with_refreshed_list();
+
+    let mut disk_records = disks
+        .list()
+        .iter()
+        .filter(|disk| disk.total_space() > 0)
+        .map(|disk| {
+            let total = disk.total_space();
+            let available = disk.available_space();
+            SystemDiskInfo {
+                name: disk.name().to_string_lossy().into_owned(),
+                mount_point: disk.mount_point().to_string_lossy().into_owned(),
+                file_system: disk.file_system().to_string_lossy().into_owned(),
+                kind: format!("{:?}", disk.kind()),
+                total,
+                available,
+                used: total.saturating_sub(available),
+                is_removable: disk.is_removable(),
+                is_read_only: disk.is_read_only(),
+            }
+        })
+        .collect::<Vec<_>>();
+    disk_records.sort_by(|left, right| left.mount_point.cmp(&right.mount_point));
+
+    let disk_total = disk_records.iter().map(|disk| disk.total).sum::<u64>();
+    let disk_available = disk_records.iter().map(|disk| disk.available).sum::<u64>();
+
+    let mut network_records = networks
+        .iter()
+        .map(|(name, network)| SystemNetworkInfo {
+            name: name.clone(),
+            mac_address: network.mac_address().to_string(),
+            ip_addresses: network
+                .ip_networks()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            received: network.total_received(),
+            transmitted: network.total_transmitted(),
+            packets_received: network.total_packets_received(),
+            packets_transmitted: network.total_packets_transmitted(),
+            mtu: network.mtu(),
+        })
+        .collect::<Vec<_>>();
+    network_records.sort_by(|left, right| left.name.cmp(&right.name));
+
+    Ok(SystemInfoSnapshot {
+        collected_at: chrono_like_timestamp(),
+        os: SystemOsInfo {
+            name: System::name(),
+            version: System::os_version(),
+            long_version: System::long_os_version(),
+            kernel_version: System::kernel_version(),
+            host_name: System::host_name(),
+            architecture: System::cpu_arch(),
+            uptime_seconds: System::uptime(),
+            boot_time: System::boot_time(),
+        },
+        cpu: SystemCpuInfo {
+            brand: cpu
+                .map(|item| item.brand().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "未知 CPU".to_string()),
+            vendor: cpu
+                .map(|item| item.vendor_id().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "未知厂商".to_string()),
+            physical_core_count: System::physical_core_count(),
+            logical_core_count: system.cpus().len(),
+            frequency_mhz: cpu.map(|item| item.frequency()).unwrap_or(0),
+            usage_percent: system.global_cpu_usage(),
+        },
+        memory: SystemMemoryInfo {
+            total: system.total_memory(),
+            used: system.used_memory(),
+            available: system.available_memory(),
+            free: system.free_memory(),
+            total_swap: system.total_swap(),
+            used_swap: system.used_swap(),
+            free_swap: system.free_swap(),
+        },
+        disk_summary: SystemDiskSummary {
+            total: disk_total,
+            used: disk_total.saturating_sub(disk_available),
+            available: disk_available,
+        },
+        disks: disk_records,
+        networks: network_records,
+    })
+}
+
+fn normalize_network_host(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("目标地址不能为空".to_string());
+    }
+
+    let without_scheme = trimmed
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(trimmed);
+    let without_path = without_scheme
+        .split(|ch| matches!(ch, '/' | '?' | '#'))
+        .next()
+        .unwrap_or(without_scheme);
+    let without_userinfo = without_path.rsplit('@').next().unwrap_or(without_path);
+    let host = without_userinfo.trim();
+
+    if host.starts_with('[') {
+        if let Some(end_index) = host.find(']') {
+            let ipv6 = host[1..end_index].trim();
+            if !ipv6.is_empty() {
+                return Ok(ipv6.to_string());
+            }
+        }
+    }
+
+    let colon_count = host.matches(':').count();
+    let host_without_port = if colon_count == 1 {
+        let (name, maybe_port) = host.rsplit_once(':').unwrap_or((host, ""));
+        if maybe_port.chars().all(|ch| ch.is_ascii_digit()) {
+            name
+        } else {
+            host
+        }
+    } else {
+        host
+    };
+
+    let normalized = host_without_port
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    if normalized.is_empty() {
+        Err("目标地址无效".to_string())
+    } else {
+        Ok(normalized.to_string())
+    }
+}
+
+fn unique_sorted(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut items = values.into_iter().collect::<Vec<_>>();
+    items.sort();
+    items.dedup();
+    items
+}
+
+fn parse_packet_loss(output: &str) -> Option<f32> {
+    for line in output.lines() {
+        if let Some(percent_index) = line.find('%') {
+            let before_percent = &line[..percent_index];
+            let number = before_percent
+                .split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+                .filter(|part| !part.is_empty())
+                .last()?;
+            if line.to_ascii_lowercase().contains("loss") || line.contains("丢失") {
+                if let Ok(value) = number.parse::<f32>() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_average_ping_ms(output: &str) -> Option<f32> {
+    for line in output.lines() {
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("min/avg/max") {
+            let (_, values) = line.split_once('=')?;
+            let avg = values.trim().split('/').nth(1)?;
+            if let Ok(value) = avg.trim().parse::<f32>() {
+                return Some(value);
+            }
+        }
+        if let Some((_, value)) = line.split_once("Average =") {
+            let avg = value.trim().trim_end_matches("ms").trim();
+            if let Ok(parsed) = avg.parse::<f32>() {
+                return Some(parsed);
+            }
+        }
+        if let Some((_, value)) = line.split_once("平均 =") {
+            let avg = value.trim().trim_end_matches("ms").trim();
+            if let Ok(parsed) = avg.parse::<f32>() {
+                return Some(parsed);
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn resolve_dns(host: String) -> Result<DnsLookupResult, String> {
+    let normalized_host = normalize_network_host(&host)?;
+    let started_at = Instant::now();
+    let addresses = (normalized_host.as_str(), 0)
+        .to_socket_addrs()
+        .map_err(|error| format!("DNS 解析失败: {}", error))?;
+    let addresses = unique_sorted(addresses.map(|address| address.ip().to_string()));
+
+    Ok(DnsLookupResult {
+        host: normalized_host,
+        addresses,
+        duration_ms: started_at.elapsed().as_millis(),
+    })
+}
+
+#[tauri::command]
+fn check_tcp_port(request: TcpPortCheckRequest) -> Result<TcpPortCheckResult, String> {
+    let host = normalize_network_host(&request.host)?;
+    if request.port == 0 {
+        return Err("端口必须在 1-65535 之间".to_string());
+    }
+
+    let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(2000).clamp(200, 10000));
+    let started_at = Instant::now();
+    let addresses = (host.as_str(), request.port)
+        .to_socket_addrs()
+        .map_err(|error| format!("解析目标失败: {}", error))?
+        .collect::<Vec<_>>();
+
+    if addresses.is_empty() {
+        return Ok(TcpPortCheckResult {
+            host,
+            port: request.port,
+            reachable: false,
+            resolved_address: None,
+            duration_ms: started_at.elapsed().as_millis(),
+            error: Some("没有解析到可连接地址".to_string()),
+        });
+    }
+
+    let mut last_error = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, timeout) {
+            Ok(_) => {
+                return Ok(TcpPortCheckResult {
+                    host,
+                    port: request.port,
+                    reachable: true,
+                    resolved_address: Some(address.to_string()),
+                    duration_ms: started_at.elapsed().as_millis(),
+                    error: None,
+                });
+            }
+            Err(error) => {
+                last_error = Some(format!("{}: {}", address, error));
+            }
+        }
+    }
+
+    Ok(TcpPortCheckResult {
+        host,
+        port: request.port,
+        reachable: false,
+        resolved_address: None,
+        duration_ms: started_at.elapsed().as_millis(),
+        error: last_error,
+    })
+}
+
+#[tauri::command]
+fn run_ping(request: PingRequest) -> Result<PingResult, String> {
+    let host = normalize_network_host(&request.host)?;
+    let count = request.count.unwrap_or(4).clamp(1, 10).to_string();
+    let started_at = Instant::now();
+
+    #[cfg(target_os = "windows")]
+    let output = Command::new("ping")
+        .args(["-n", &count, "-w", "2000", &host])
+        .output();
+
+    #[cfg(target_os = "macos")]
+    let output = Command::new("ping")
+        .args(["-c", &count, "-W", "2000", &host])
+        .output();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let output = Command::new("ping")
+        .args(["-c", &count, "-W", "2", &host])
+        .output();
+
+    #[cfg(not(any(unix, target_os = "windows")))]
+    let output = Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "当前平台不支持 ping",
+    ));
+
+    let output = output.map_err(|error| format!("执行 ping 失败: {}", error))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let text = if stderr.trim().is_empty() {
+        stdout
+    } else if stdout.trim().is_empty() {
+        stderr
+    } else {
+        format!("{}\n{}", stdout.trim_end(), stderr)
+    };
+
+    Ok(PingResult {
+        host,
+        success: output.status.success(),
+        exit_code: output.status.code(),
+        duration_ms: started_at.elapsed().as_millis(),
+        packet_loss_percent: parse_packet_loss(&text),
+        average_ms: parse_average_ping_ms(&text),
+        output: text.trim().to_string(),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1182,7 +1634,11 @@ pub fn run() {
             get_setting,
             set_setting,
             get_autostart_enabled,
-            set_autostart_enabled
+            set_autostart_enabled,
+            get_system_info,
+            resolve_dns,
+            check_tcp_port,
+            run_ping
         ])
         .setup(|app| {
             let app_data_dir = app
