@@ -91,6 +91,44 @@ type ToastNotification = SidebarNotification & {
 
 const CLIPBOARD_TEXT_POLL_INTERVAL = 500;
 const CLIPBOARD_IMAGE_POLL_INTERVAL = 2000;
+const TOOL_ORDER_SETTING_KEY = "tool_order";
+const DEFAULT_TOOL_ORDER = TOOLS.map((tool) => tool.id);
+
+function normalizeToolOrder(toolIds: unknown): ToolId[] {
+  const validToolIds = new Set(TOOLS.map((tool) => tool.id));
+  const seenToolIds = new Set<ToolId>();
+  const normalizedOrder: ToolId[] = [];
+
+  if (Array.isArray(toolIds)) {
+    for (const value of toolIds) {
+      if (typeof value !== "string") continue;
+
+      const toolId = value as ToolId;
+      if (!validToolIds.has(toolId) || seenToolIds.has(toolId)) continue;
+
+      seenToolIds.add(toolId);
+      normalizedOrder.push(toolId);
+    }
+  }
+
+  for (const defaultToolId of DEFAULT_TOOL_ORDER) {
+    if (!seenToolIds.has(defaultToolId)) {
+      normalizedOrder.push(defaultToolId);
+    }
+  }
+
+  return normalizedOrder;
+}
+
+function parseToolOrderSetting(value: string | null) {
+  if (!value) return DEFAULT_TOOL_ORDER;
+
+  try {
+    return normalizeToolOrder(JSON.parse(value));
+  } catch {
+    return DEFAULT_TOOL_ORDER;
+  }
+}
 
 function getSearchScore(fields: string[], query: string) {
   if (!query) return 0;
@@ -172,6 +210,7 @@ function App() {
   const [clipboardSearchItems, setClipboardSearchItems] = useState<ClipboardSearchItem[]>([]);
   const [isClipboardMonitoring, setIsClipboardMonitoring] = useState(true);
   const [clipboardDefaultDateFilter, setClipboardDefaultDateFilter] = useState<ClipboardDefaultDateFilter>("today");
+  const [toolOrder, setToolOrder] = useState<ToolId[]>(DEFAULT_TOOL_ORDER);
   const [textSearchEntries, setTextSearchEntries] = useState<TextEntrySearchItem[]>([]);
   const [todoSearchItems, setTodoSearchItems] = useState<TodoSearchItem[]>([]);
   const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>([]);
@@ -211,6 +250,13 @@ function App() {
   ];
 
   const unreadNotificationCount = notifications.filter((item) => !item.read).length;
+  const orderedTools = useMemo(() => {
+    const toolById = new Map(TOOLS.map((tool) => [tool.id, tool]));
+    return normalizeToolOrder(toolOrder).flatMap((toolId) => {
+      const tool = toolById.get(toolId);
+      return tool ? [tool] : [];
+    });
+  }, [toolOrder]);
 
   const appendToast = (notification: SidebarNotification) => {
     setToastNotifications((current) => {
@@ -302,8 +348,9 @@ function App() {
     void Promise.all([
       invoke<string | null>("get_setting", { key: "clipboard_monitoring" }),
       invoke<string | null>("get_setting", { key: "clipboard_default_date_filter" }),
+      invoke<string | null>("get_setting", { key: TOOL_ORDER_SETTING_KEY }),
     ])
-      .then(([monitoringValue, dateFilterValue]) => {
+      .then(([monitoringValue, dateFilterValue, toolOrderValue]) => {
         if (monitoringValue === "false") {
           setIsClipboardMonitoring(false);
         }
@@ -314,6 +361,7 @@ function App() {
         ) {
           setClipboardDefaultDateFilter(dateFilterValue);
         }
+        setToolOrder(parseToolOrderSetting(toolOrderValue));
       })
       .catch(console.error);
     const unlistenAppNotification = listen<SidebarNotification>("app-notification", (event) => {
@@ -922,6 +970,19 @@ function App() {
     });
   };
 
+  const updateToolOrder = (nextOrder: ToolId[]) => {
+    const normalizedOrder = normalizeToolOrder(nextOrder);
+    setToolOrder(normalizedOrder);
+    void invoke("set_setting", {
+      key: TOOL_ORDER_SETTING_KEY,
+      value: JSON.stringify(normalizedOrder),
+    }).catch(console.error);
+  };
+
+  const resetToolOrder = () => {
+    updateToolOrder(DEFAULT_TOOL_ORDER);
+  };
+
   const handleToolClick = async (toolId: ToolId) => {
     const tool = TOOLS.find((item) => item.id === toolId);
     if (!tool) return;
@@ -1215,9 +1276,12 @@ function App() {
         sidebarWidth={sidebarWidth}
         clipboardMonitoring={isClipboardMonitoring}
         clipboardDefaultDateFilter={clipboardDefaultDateFilter}
+        tools={orderedTools}
         onSidebarWidthChange={updateSidebarWidth}
         onClipboardMonitoringChange={updateClipboardMonitoring}
         onClipboardDefaultDateFilterChange={setClipboardDefaultDateFilter}
+        onToolOrderChange={updateToolOrder}
+        onToolOrderReset={resetToolOrder}
       />
     ),
   };
@@ -1247,7 +1311,7 @@ function App() {
         {activeView === "main" ? (
           <MainSidebarView
             currentTime={currentTime}
-            tools={TOOLS}
+            tools={orderedTools}
             switches={switches}
             commandQuery={commandQuery}
             isCommandPaletteOpen={isCommandPaletteOpen}
@@ -1270,6 +1334,7 @@ function App() {
             onNotificationRead={handleNotificationRead}
             onNotificationClear={handleNotificationClear}
             onToolClick={handleToolClick}
+            onToolOrderManage={() => setActiveView("settings")}
             onSwitchClick={handleSwitchClick}
           />
         ) : (

@@ -51,6 +51,7 @@ type MainSidebarViewProps = {
   onNotificationRead: (id: string, read: boolean) => void;
   onNotificationClear: () => void;
   onToolClick: (toolId: ToolItem["id"]) => void;
+  onToolOrderManage: () => void;
   onSwitchClick: (switchId: ToggleSwitchItem["id"]) => void;
 };
 
@@ -113,6 +114,7 @@ function MainSidebarView({
   onNotificationRead,
   onNotificationClear,
   onToolClick,
+  onToolOrderManage,
   onSwitchClick,
 }: MainSidebarViewProps) {
   let lastGroup = "";
@@ -308,11 +310,21 @@ function MainSidebarView({
               <span className="section-icon">⚡</span>
               功能区
             </h2>
-            {hasHiddenTools && (
-              <span className="tools-count">
-                {visibleTools.length}/{tools.length}
-              </span>
-            )}
+            <div className="tools-header-actions">
+              {hasHiddenTools && (
+                <span className="tools-count">
+                  {visibleTools.length}/{tools.length}
+                </span>
+              )}
+              <button
+                className="tools-manage-btn"
+                type="button"
+                onClick={onToolOrderManage}
+                title="管理功能顺序"
+              >
+                管理
+              </button>
+            </div>
           </div>
           <div className="tools-grid">
             {visibleTools.map((tool) => (

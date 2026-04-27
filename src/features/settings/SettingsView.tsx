@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import type { DragEvent } from "react";
 import SubViewHeader from "../../components/SubViewHeader";
+import type { ToolId, ToolItem } from "../../types/sidebar";
 
 export type ClipboardDefaultDateFilter = "today" | "last7" | "all";
 
@@ -9,9 +11,12 @@ type SettingsViewProps = {
   sidebarWidth: number;
   clipboardMonitoring: boolean;
   clipboardDefaultDateFilter: ClipboardDefaultDateFilter;
+  tools: ToolItem[];
   onSidebarWidthChange: (width: number) => void;
   onClipboardMonitoringChange: (enabled: boolean) => void;
   onClipboardDefaultDateFilterChange: (filter: ClipboardDefaultDateFilter) => void;
+  onToolOrderChange: (toolIds: ToolId[]) => void;
+  onToolOrderReset: () => void;
 };
 
 const dateFilterOptions: Array<{ id: ClipboardDefaultDateFilter; label: string; description: string }> = [
@@ -25,13 +30,17 @@ function SettingsView({
   sidebarWidth,
   clipboardMonitoring,
   clipboardDefaultDateFilter,
+  tools,
   onSidebarWidthChange,
   onClipboardMonitoringChange,
   onClipboardDefaultDateFilterChange,
+  onToolOrderChange,
+  onToolOrderReset,
 }: SettingsViewProps) {
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [isLoadingAutostart, setIsLoadingAutostart] = useState(true);
   const [settingsError, setSettingsError] = useState("");
+  const [draggingToolId, setDraggingToolId] = useState<ToolId | null>(null);
 
   useEffect(() => {
     invoke<boolean>("get_autostart_enabled")
@@ -65,6 +74,47 @@ function SettingsView({
 
   const updateSidebarWidth = (width: number) => {
     onSidebarWidthChange(width);
+  };
+
+  const moveTool = (toolId: ToolId, direction: -1 | 1) => {
+    const currentIndex = tools.findIndex((tool) => tool.id === toolId);
+    const targetIndex = currentIndex + direction;
+
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= tools.length) return;
+
+    const nextTools = [...tools];
+    const [movedTool] = nextTools.splice(currentIndex, 1);
+    nextTools.splice(targetIndex, 0, movedTool);
+    onToolOrderChange(nextTools.map((tool) => tool.id));
+  };
+
+  const handleToolDragStart = (event: DragEvent<HTMLDivElement>, toolId: ToolId) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", toolId);
+    setDraggingToolId(toolId);
+  };
+
+  const handleToolDrop = (event: DragEvent<HTMLDivElement>, targetToolId: ToolId) => {
+    event.preventDefault();
+
+    if (!draggingToolId || draggingToolId === targetToolId) {
+      setDraggingToolId(null);
+      return;
+    }
+
+    const nextTools = [...tools];
+    const fromIndex = nextTools.findIndex((tool) => tool.id === draggingToolId);
+    const toIndex = nextTools.findIndex((tool) => tool.id === targetToolId);
+
+    if (fromIndex < 0 || toIndex < 0) {
+      setDraggingToolId(null);
+      return;
+    }
+
+    const [movedTool] = nextTools.splice(fromIndex, 1);
+    nextTools.splice(toIndex, 0, movedTool);
+    onToolOrderChange(nextTools.map((tool) => tool.id));
+    setDraggingToolId(null);
   };
 
   return (
@@ -148,6 +198,61 @@ function SettingsView({
                 </button>
               ))}
             </div>
+          </div>
+        </section>
+
+        <section className="app-settings-section">
+          <div className="app-settings-section-header">
+            <h3>功能区</h3>
+            <button
+              className="app-settings-reset-btn"
+              type="button"
+              onClick={onToolOrderReset}
+            >
+              恢复默认
+            </button>
+          </div>
+          <div className="app-settings-tool-list">
+            {tools.map((tool, index) => (
+              <div
+                key={tool.id}
+                className={`app-settings-tool-item ${draggingToolId === tool.id ? "dragging" : ""}`}
+                draggable
+                onDragStart={(event) => handleToolDragStart(event, tool.id)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => handleToolDrop(event, tool.id)}
+                onDragEnd={() => setDraggingToolId(null)}
+              >
+                <div className="app-settings-tool-drag" aria-hidden="true">☰</div>
+                <div className="app-settings-tool-icon" aria-hidden="true">
+                  {tool.iconSrc ? <img src={tool.iconSrc} alt="" /> : tool.icon}
+                </div>
+                <div className="app-settings-tool-copy">
+                  <div className="app-settings-row-title">{tool.label}</div>
+                  <div className="app-settings-row-description">{tool.desc}</div>
+                </div>
+                <div className="app-settings-tool-actions">
+                  <button
+                    type="button"
+                    onClick={() => moveTool(tool.id, -1)}
+                    disabled={index === 0}
+                    title="上移"
+                    aria-label={`${tool.label} 上移`}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveTool(tool.id, 1)}
+                    disabled={index === tools.length - 1}
+                    title="下移"
+                    aria-label={`${tool.label} 下移`}
+                  >
+                    ↓
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       </div>
