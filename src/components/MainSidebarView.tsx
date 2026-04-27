@@ -1,6 +1,8 @@
-import type { KeyboardEvent, RefObject } from "react";
+import { useState, type KeyboardEvent, type RefObject } from "react";
 import notificationIcon from "../assets/alter.svg";
 import type { ToggleSwitchItem, ToolItem } from "../types/sidebar";
+
+const DEFAULT_VISIBLE_TOOL_COUNT = 6;
 
 export type CommandPaletteResult = {
   id: string;
@@ -114,6 +116,9 @@ function MainSidebarView({
   onSwitchClick,
 }: MainSidebarViewProps) {
   let lastGroup = "";
+  const [isToolsExpanded, setIsToolsExpanded] = useState(false);
+  const hasHiddenTools = tools.length > DEFAULT_VISIBLE_TOOL_COUNT;
+  const visibleTools = isToolsExpanded ? tools : tools.slice(0, DEFAULT_VISIBLE_TOOL_COUNT);
 
   return (
     <div className="main-view">
@@ -298,12 +303,19 @@ function MainSidebarView({
         </section>
 
         <section className="tools-section">
-          <h2 className="section-title">
-            <span className="section-icon">⚡</span>
-            功能区
-          </h2>
+          <div className="tools-section-header">
+            <h2 className="section-title">
+              <span className="section-icon">⚡</span>
+              功能区
+            </h2>
+            {hasHiddenTools && (
+              <span className="tools-count">
+                {visibleTools.length}/{tools.length}
+              </span>
+            )}
+          </div>
           <div className="tools-grid">
-            {tools.map((tool) => (
+            {visibleTools.map((tool) => (
               <div className="tool-card" key={tool.id} onClick={() => onToolClick(tool.id)}>
                 <div className="tool-icon">
                   {tool.iconSrc ? <img src={tool.iconSrc} alt="" /> : tool.icon}
@@ -315,6 +327,16 @@ function MainSidebarView({
               </div>
             ))}
           </div>
+          {hasHiddenTools && (
+            <button
+              className="tools-more-btn"
+              type="button"
+              onClick={() => setIsToolsExpanded((current) => !current)}
+            >
+              <span>{isToolsExpanded ? "收起" : "展开更多"}</span>
+              <span className={`tools-more-icon ${isToolsExpanded ? "expanded" : ""}`}>⌄</span>
+            </button>
+          )}
         </section>
       </div>
 
