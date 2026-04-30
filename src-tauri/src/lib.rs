@@ -11,10 +11,6 @@ use tauri::{
     LogicalPosition, LogicalSize, Manager, Monitor, Position, Size, State,
 };
 use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
-use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf, process::Command, sync::Mutex};
-use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, State};
-use tauri_plugin_global_shortcut::ShortcutState;
 
 mod platform;
 
@@ -359,10 +355,10 @@ fn toggle_desktop(show: bool) -> Result<(), String> {
 }
 
 // 切换任务栏的隐藏/显示
-#[tauri::command]
-fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String> {
-    platform::toggle_taskbar(window, show)
-}
+// #[tauri::command]
+// fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String> {
+//     platform::toggle_taskbar(window, show)
+// }
 
 fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
     let (_, encoded) = data_url
@@ -728,40 +724,7 @@ fn insert_notification_record(
 // 切换任务栏的隐藏/显示
 #[tauri::command]
 fn toggle_taskbar(window: tauri::WebviewWindow, show: bool) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    unsafe {
-        let taskbar = FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).unwrap_or_default();
-        let cmd = if show { SW_SHOWNA } else { SW_HIDE };
-        if taskbar != HWND::default() {
-            let _ = ShowWindow(taskbar, cmd);
-        }
-
-        let mut secondary =
-            FindWindowW(w!("Shell_SecondaryTrayWnd"), PCWSTR::null()).unwrap_or_default();
-        while secondary != HWND::default() {
-            let _ = ShowWindow(secondary, cmd);
-            secondary = FindWindowExW(
-                None,
-                Some(secondary),
-                w!("Shell_SecondaryTrayWnd"),
-                PCWSTR::null(),
-            )
-            .unwrap_or_default();
-        }
-
-        if show {
-            // Taskbar 显示时也是 Topmost，会挤到 Z 轴最上面。
-            // 这里我们通过取消置顶再重新置顶，强制洗牌让我们的窗口回到 Topmost 的最顶端。
-            let _ = window.set_always_on_top(false);
-            let _ = window.set_always_on_top(true);
-        }
-
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Err("仅支持 Windows 平台".to_string())
-    }
+    platform::toggle_taskbar(window, show)
 }
 
 fn password_vault_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1945,8 +1908,7 @@ pub fn run() {
             get_system_info,
             resolve_dns,
             check_tcp_port,
-            run_ping
-            extract_program_icon,
+            run_ping,
             authenticate_password_vault,
             load_password_vault,
             save_password_vault
