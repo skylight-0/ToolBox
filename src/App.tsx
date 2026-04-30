@@ -138,13 +138,14 @@ function App() {
     return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${weekdays[date.getDay()]}`;
   };
 
-  // 当前视图状态：'main' | 'json' | 'todo'
+  // 当前视图状态：'main' | 'json' | 'todo' | 'password'
   const [activeView, setActiveView] = useState("main");
 
   // 快捷工具项
   const tools = [
     { id: "json", icon: "✨", label: "JSON 格式化", desc: "粘贴文本格式化" },
     { id: "todo", icon: "☑️", label: "待办事项", desc: "本地待办清单" },
+    { id: "password", icon: "🔐", label: "密码管理", desc: "域名账号与备注" },
     { id: "clipboard", icon: "📋", label: "剪切板增强", desc: "复制历史与图片预览" },
     { id: "notepad", icon: "📝", label: "记事本", desc: "快速新建文本" },
     { id: "calc", icon: "🧮", label: "计算器", desc: "打开计算器" },
@@ -166,7 +167,9 @@ function App() {
   ];
 
   const handleToolClick = (toolId: string) => {
-    if (toolId === "json" || toolId === "todo" || toolId === "quicklaunch" || toolId === "pomodoro" || toolId === "clipboard") {
+    if (toolId === "password") {
+      openPasswordManager();
+    } else if (toolId === "json" || toolId === "todo" || toolId === "quicklaunch" || toolId === "pomodoro" || toolId === "clipboard") {
       setActiveView(toolId);
     } else {
       let action = "";
@@ -383,6 +386,295 @@ function App() {
               )}
             </div>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  // ============================================
+  // 密码管理逻辑
+  // ============================================
+  type PasswordAccount = { id: string; username: string; password: string; note: string };
+  type PasswordDomain = { id: string; domain: string; accounts: PasswordAccount[] };
+  type PasswordVault = { domains: PasswordDomain[] };
+
+  const [passwordVault, setPasswordVault] = useState<PasswordVault>({ domains: [] });
+  const [passwordVaultReady, setPasswordVaultReady] = useState(false);
+  const [passwordAuthError, setPasswordAuthError] = useState("");
+  const [passwordSaveError, setPasswordSaveError] = useState("");
+  const [selectedPasswordDomainId, setSelectedPasswordDomainId] = useState("");
+  const [passwordSearch, setPasswordSearch] = useState("");
+  const [newPasswordDomain, setNewPasswordDomain] = useState("");
+  const [newAccountUsername, setNewAccountUsername] = useState("");
+  const [newAccountPassword, setNewAccountPassword] = useState("");
+  const [newAccountNote, setNewAccountNote] = useState("");
+  const [visiblePasswordIds, setVisiblePasswordIds] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (!passwordVaultReady) return;
+    const exists = passwordVault.domains.some(d => d.id === selectedPasswordDomainId);
+    if (!exists) {
+      setSelectedPasswordDomainId(passwordVault.domains[0]?.id || "");
+    }
+  }, [passwordVault, passwordVaultReady, selectedPasswordDomainId]);
+
+  useEffect(() => {
+    if (!passwordVaultReady) return;
+    const timer = window.setTimeout(() => {
+      invoke("save_password_vault", { vault: passwordVault })
+        .then(() => setPasswordSaveError(""))
+        .catch((e) => setPasswordSaveError(String(e)));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [passwordVault, passwordVaultReady]);
+
+  const openPasswordManager = async () => {
+    setPasswordAuthError("");
+    setPasswordSaveError("");
+    isDialogOpenRef.current = true;
+    try {
+      const authenticated = await invoke<boolean>("authenticate_password_vault");
+      if (!authenticated) {
+        setPasswordAuthError("系统锁屏密码验证未通过");
+        return;
+      }
+
+      const loadedVault = await invoke<PasswordVault>("load_password_vault");
+      const normalizedVault = loadedVault?.domains ? loadedVault : { domains: [] };
+      setPasswordVault(normalizedVault);
+      setSelectedPasswordDomainId(normalizedVault.domains[0]?.id || "");
+      setPasswordVaultReady(true);
+      setActiveView("password");
+    } catch (e) {
+      setPasswordAuthError(String(e));
+    } finally {
+      isDialogOpenRef.current = false;
+    }
+  };
+
+  const lockPasswordManager = () => {
+    setActiveView("main");
+    setPasswordVaultReady(false);
+    setPasswordVault({ domains: [] });
+    setSelectedPasswordDomainId("");
+    setNewPasswordDomain("");
+    setNewAccountUsername("");
+    setNewAccountPassword("");
+    setNewAccountNote("");
+    setVisiblePasswordIds({});
+  };
+
+  const addPasswordDomain = () => {
+    const domain = newPasswordDomain.trim();
+    if (!domain) return;
+    const exists = passwordVault.domains.some(d => d.domain.toLowerCase() === domain.toLowerCase());
+    if (exists) return;
+
+    const id = Date.now().toString();
+    setPasswordVault(prev => ({
+      domains: [{ id, domain, accounts: [] }, ...prev.domains],
+    }));
+    setSelectedPasswordDomainId(id);
+    setNewPasswordDomain("");
+  };
+
+  const deletePasswordDomain = (domainId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPasswordVault(prev => ({
+      domains: prev.domains.filter(domain => domain.id !== domainId),
+    }));
+  };
+
+  const addPasswordAccount = () => {
+    if (!selectedPasswordDomainId || !newAccountUsername.trim() || !newAccountPassword.trim()) return;
+    const account: PasswordAccount = {
+      id: Date.now().toString() + Math.random().toString(36).slice(2),
+      username: newAccountUsername.trim(),
+      password: newAccountPassword,
+      note: newAccountNote.trim(),
+    };
+
+    setPasswordVault(prev => ({
+      domains: prev.domains.map(domain =>
+        domain.id === selectedPasswordDomainId
+          ? { ...domain, accounts: [account, ...domain.accounts] }
+          : domain
+      ),
+    }));
+    setNewAccountUsername("");
+    setNewAccountPassword("");
+    setNewAccountNote("");
+  };
+
+  const deletePasswordAccount = (domainId: string, accountId: string) => {
+    setPasswordVault(prev => ({
+      domains: prev.domains.map(domain =>
+        domain.id === domainId
+          ? { ...domain, accounts: domain.accounts.filter(account => account.id !== accountId) }
+          : domain
+      ),
+    }));
+  };
+
+  const copyPassword = async (password: string) => {
+    try {
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(password);
+    } catch (e) {
+      setPasswordSaveError(String(e));
+    }
+  };
+
+  const filteredPasswordDomains = passwordVault.domains.filter(domain => {
+    const keyword = passwordSearch.trim().toLowerCase();
+    if (!keyword) return true;
+    return (
+      domain.domain.toLowerCase().includes(keyword) ||
+      domain.accounts.some(account =>
+        account.username.toLowerCase().includes(keyword) ||
+        account.note.toLowerCase().includes(keyword)
+      )
+    );
+  });
+  const selectedPasswordDomain = passwordVault.domains.find(domain => domain.id === selectedPasswordDomainId);
+
+  const renderPasswordView = () => (
+    <div className="sub-view password-split-view">
+      <div className="password-sidebar">
+        <div className="password-sidebar-header">
+          <div className="back-btn" onClick={lockPasswordManager}>
+            <span className="back-icon">←</span> 返回
+          </div>
+          <h2 className="sub-view-title">密码管理</h2>
+        </div>
+
+        <div className="password-search-wrap">
+          <input
+            className="password-search-input"
+            placeholder="搜索域名或账号..."
+            value={passwordSearch}
+            onChange={e => setPasswordSearch(e.target.value)}
+          />
+        </div>
+
+        <div className="password-domain-add">
+          <input
+            className="password-domain-input"
+            placeholder="添加域名..."
+            value={newPasswordDomain}
+            onChange={e => setNewPasswordDomain(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addPasswordDomain()}
+          />
+          <button className="password-icon-btn" onClick={addPasswordDomain} title="添加域名">+</button>
+        </div>
+
+        <div className="password-domain-list">
+          {filteredPasswordDomains.length === 0 && (
+            <div className="password-empty small">暂无域名</div>
+          )}
+          {filteredPasswordDomains.map(domain => (
+            <div
+              key={domain.id}
+              className={`password-domain-item ${selectedPasswordDomainId === domain.id ? 'active' : ''}`}
+              onClick={() => setSelectedPasswordDomainId(domain.id)}
+            >
+              <div className="password-domain-text">
+                <span className="password-domain-name">{domain.domain}</span>
+                <span className="password-domain-count">{domain.accounts.length} 个账号</span>
+              </div>
+              <button
+                className="password-domain-delete"
+                onClick={(e) => deletePasswordDomain(domain.id, e)}
+                title="删除域名"
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="password-main">
+        <div className="password-main-header">
+          <div>
+            <h2 className="sub-view-title">{selectedPasswordDomain?.domain || "选择一个域名"}</h2>
+            <div className="password-header-meta">
+              {selectedPasswordDomain ? `${selectedPasswordDomain.accounts.length} 个账号` : "先添加域名，再添加账号"}
+            </div>
+          </div>
+          <button className="password-lock-btn" onClick={lockPasswordManager}>锁定</button>
+        </div>
+
+        <div className="sub-view-content password-content">
+          {passwordSaveError && <div className="password-error">{passwordSaveError}</div>}
+
+          {selectedPasswordDomain ? (
+            <>
+              <div className="password-account-form">
+                <input
+                  className="password-form-input"
+                  placeholder="账号 / 用户名"
+                  value={newAccountUsername}
+                  onChange={e => setNewAccountUsername(e.target.value)}
+                />
+                <input
+                  className="password-form-input"
+                  type="password"
+                  placeholder="密码"
+                  value={newAccountPassword}
+                  onChange={e => setNewAccountPassword(e.target.value)}
+                />
+                <input
+                  className="password-form-input note"
+                  placeholder="备注（可选）"
+                  value={newAccountNote}
+                  onChange={e => setNewAccountNote(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && addPasswordAccount()}
+                />
+                <button className="password-add-account-btn" onClick={addPasswordAccount}>添加账号</button>
+              </div>
+
+              <div className="password-account-list">
+                {selectedPasswordDomain.accounts.length === 0 && (
+                  <div className="password-empty">这个域名下还没有账号</div>
+                )}
+                {selectedPasswordDomain.accounts.map(account => {
+                  const isVisible = !!visiblePasswordIds[account.id];
+                  return (
+                    <div className="password-account-item" key={account.id}>
+                      <div className="password-account-top">
+                        <div className="password-account-user">{account.username}</div>
+                        <div className="password-account-actions">
+                          <button
+                            className="password-small-btn"
+                            onClick={() => setVisiblePasswordIds(prev => ({ ...prev, [account.id]: !prev[account.id] }))}
+                          >
+                            {isVisible ? "隐藏" : "显示"}
+                          </button>
+                          <button className="password-small-btn" onClick={() => copyPassword(account.password)}>
+                            复制
+                          </button>
+                          <button
+                            className="password-delete-account"
+                            onClick={() => deletePasswordAccount(selectedPasswordDomain.id, account.id)}
+                            title="删除账号"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                      <div className="password-value">
+                        {isVisible ? account.password : "•".repeat(Math.min(Math.max(account.password.length, 8), 24))}
+                      </div>
+                      <div className="password-note">{account.note || "无备注"}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="password-empty">左侧添加或选择一个域名</div>
+          )}
         </div>
       </div>
     </div>
@@ -1123,6 +1415,7 @@ function App() {
                     </div>
                   ))}
                 </div>
+                {passwordAuthError && <div className="main-error">{passwordAuthError}</div>}
               </section>
 
               <section className="shortcuts-section">
@@ -1168,6 +1461,8 @@ function App() {
           renderJsonView()
         ) : activeView === "todo" ? (
           renderTodoView()
+        ) : activeView === "password" ? (
+          renderPasswordView()
         ) : activeView === "clipboard" ? (
           renderClipboardView()
         ) : activeView === "quicklaunch" ? (
