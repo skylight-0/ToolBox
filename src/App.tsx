@@ -19,6 +19,7 @@ import {
 } from "./features/clipboard/clipboardModel";
 import JsonToolView from "./features/json/JsonToolView";
 import NetworkToolView from "./features/network/NetworkToolView";
+import PasswordView from "./features/password/PasswordView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QrCodeView from "./features/qrcode/QrCodeView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
@@ -92,6 +93,7 @@ type ToastNotification = SidebarNotification & {
 const CLIPBOARD_TEXT_POLL_INTERVAL = 500;
 const CLIPBOARD_IMAGE_POLL_INTERVAL = 2000;
 const TOOL_ORDER_SETTING_KEY = "tool_order";
+const PASSWORD_REQUIRE_AUTH_SETTING_KEY = "password_require_auth";
 const DEFAULT_TOOL_ORDER = TOOLS.map((tool) => tool.id);
 
 function normalizeToolOrder(toolIds: unknown): ToolId[] {
@@ -210,6 +212,7 @@ function App() {
   const [clipboardSearchItems, setClipboardSearchItems] = useState<ClipboardSearchItem[]>([]);
   const [isClipboardMonitoring, setIsClipboardMonitoring] = useState(true);
   const [clipboardDefaultDateFilter, setClipboardDefaultDateFilter] = useState<ClipboardDefaultDateFilter>("today");
+  const [passwordRequireAuth, setPasswordRequireAuth] = useState(true);
   const [toolOrder, setToolOrder] = useState<ToolId[]>(DEFAULT_TOOL_ORDER);
   const [textSearchEntries, setTextSearchEntries] = useState<TextEntrySearchItem[]>([]);
   const [todoSearchItems, setTodoSearchItems] = useState<TodoSearchItem[]>([]);
@@ -348,9 +351,10 @@ function App() {
     void Promise.all([
       invoke<string | null>("get_setting", { key: "clipboard_monitoring" }),
       invoke<string | null>("get_setting", { key: "clipboard_default_date_filter" }),
+      invoke<string | null>("get_setting", { key: PASSWORD_REQUIRE_AUTH_SETTING_KEY }),
       invoke<string | null>("get_setting", { key: TOOL_ORDER_SETTING_KEY }),
     ])
-      .then(([monitoringValue, dateFilterValue, toolOrderValue]) => {
+      .then(([monitoringValue, dateFilterValue, passwordRequireAuthValue, toolOrderValue]) => {
         if (monitoringValue === "false") {
           setIsClipboardMonitoring(false);
         }
@@ -360,6 +364,9 @@ function App() {
           dateFilterValue === "all"
         ) {
           setClipboardDefaultDateFilter(dateFilterValue);
+        }
+        if (passwordRequireAuthValue === "false") {
+          setPasswordRequireAuth(false);
         }
         setToolOrder(parseToolOrderSetting(toolOrderValue));
       })
@@ -674,6 +681,18 @@ function App() {
         score: 40,
       },
       {
+        id: "action-open-password",
+        icon: "🔐",
+        title: "打开密码管理",
+        subtitle: "验证 Windows 用户密码后管理账号",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "password" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
         id: "action-open-pomodoro",
         icon: "🍅",
         title: "打开番茄钟",
@@ -970,6 +989,17 @@ function App() {
     });
   };
 
+  const updatePasswordRequireAuth = (enabled: boolean) => {
+    setPasswordRequireAuth(enabled);
+    void invoke("set_setting", {
+      key: PASSWORD_REQUIRE_AUTH_SETTING_KEY,
+      value: enabled ? "true" : "false",
+    }).catch((error) => {
+      console.error(error);
+      setPasswordRequireAuth(!enabled);
+    });
+  };
+
   const updateToolOrder = (nextOrder: ToolId[]) => {
     const normalizedOrder = normalizeToolOrder(nextOrder);
     setToolOrder(normalizedOrder);
@@ -1251,6 +1281,13 @@ function App() {
     systeminfo: <SystemInfoView onBack={() => setActiveView("main")} />,
     network: <NetworkToolView onBack={() => setActiveView("main")} />,
     todo: <TodoView onBack={() => setActiveView("main")} />,
+    password: (
+      <PasswordView
+        onBack={() => setActiveView("main")}
+        isDialogOpenRef={isDialogOpenRef}
+        requirePasswordAuth={passwordRequireAuth}
+      />
+    ),
     clipboard: (
       <ClipboardView
         onBack={() => setActiveView("main")}
@@ -1276,10 +1313,13 @@ function App() {
         sidebarWidth={sidebarWidth}
         clipboardMonitoring={isClipboardMonitoring}
         clipboardDefaultDateFilter={clipboardDefaultDateFilter}
+        passwordRequireAuth={passwordRequireAuth}
         tools={orderedTools}
+        isDialogOpenRef={isDialogOpenRef}
         onSidebarWidthChange={updateSidebarWidth}
         onClipboardMonitoringChange={updateClipboardMonitoring}
         onClipboardDefaultDateFilterChange={setClipboardDefaultDateFilter}
+        onPasswordRequireAuthChange={updatePasswordRequireAuth}
         onToolOrderChange={updateToolOrder}
         onToolOrderReset={resetToolOrder}
       />

@@ -18,6 +18,7 @@ export const TOOLS: ToolItem[] = [
   { id: "systeminfo", kind: "view", view: "systeminfo", icon: "▥", iconSrc: systemInfoIcon, label: "本机信息", desc: "CPU 内存磁盘网络" },
   { id: "network", kind: "view", view: "network", icon: "◌", iconSrc: networkIcon, label: "网络小工具", desc: "DNS Ping 端口检测" },
   { id: "todo", kind: "view", view: "todo", icon: "☑️", iconSrc: todoIcon, label: "待办事项", desc: "本地待办清单" },
+  { id: "password", kind: "view", view: "password", icon: "🔐", label: "密码管理", desc: "Windows 用户密码保护的账号密码库" },
   { id: "textmanager", kind: "view", view: "textmanager", icon: "🗂️", iconSrc: textIcon, label: "文本管理", desc: "保存文本并按分组整理" },
   { id: "clipboard", kind: "view", view: "clipboard", icon: "📋", iconSrc: clipboardIcon, label: "剪切板增强", desc: "复制历史与图片预览" },
   { id: "quicklaunch", kind: "view", view: "quicklaunch", icon: "📌", iconSrc: quickIcon, label: "快捷访问", desc: "常用程序启动" },

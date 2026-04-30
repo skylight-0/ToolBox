@@ -2326,6 +2326,45 @@ body,
 /* ============================================
    密码管理子视图
    ============================================ */
+.password-auth-content {
+  align-items: center;
+  justify-content: center;
+}
+
+.password-auth-card {
+  width: min(320px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.password-auth-icon {
+  font-size: 36px;
+}
+
+.password-auth-title {
+  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.password-auth-desc {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.password-add-account-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .sub-view.password-split-view {
   flex-direction: row;
   padding: 0;
@@ -2365,27 +2404,17 @@ body,
 .password-domain-input,
 .password-form-input {
   min-width: 0;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  color: var(--text-primary);
   font-family: inherit;
   font-size: 13px;
   padding: 9px 10px;
   outline: none;
-  transition: all 0.2s;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
 
 .password-search-input,
 .password-domain-input {
   width: 100%;
-}
-
-.password-search-input:focus,
-.password-domain-input:focus,
-.password-form-input:focus {
-  border-color: var(--accent-color);
-  background: rgba(0, 0, 0, 0.34);
 }
 
 .password-icon-btn {
@@ -2496,6 +2525,17 @@ body,
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.password-header-actions,
+.password-detail-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.password-detail-topbar {
+  justify-content: space-between;
 }
 
 .password-lock-btn {
@@ -2616,10 +2656,12 @@ body,
 .password-value {
   font-family: Consolas, 'Courier New', monospace;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: #334155;
   padding: 8px 10px;
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(76, 96, 130, 0.18);
   border-radius: var(--radius-sm);
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.05);
   word-break: break-all;
   user-select: text;
 }
@@ -4722,7 +4764,10 @@ body,
 .qrcode-tool .qrcode-input,
 .textmanager-split-view .textmanager-search,
 .textmanager-split-view .textmanager-title-input,
-.textmanager-split-view .textmanager-textarea {
+.textmanager-split-view .textmanager-textarea,
+.password-search-input,
+.password-domain-input,
+.password-form-input {
   background: rgba(255, 255, 255, 0.86);
   border: 1px solid rgba(76, 96, 130, 0.18);
   color: #111827;
@@ -4735,7 +4780,10 @@ body,
 .qrcode-tool .qrcode-input::placeholder,
 .textmanager-split-view .textmanager-search::placeholder,
 .textmanager-split-view .textmanager-title-input::placeholder,
-.textmanager-split-view .textmanager-textarea::placeholder {
+.textmanager-split-view .textmanager-textarea::placeholder,
+.password-search-input::placeholder,
+.password-domain-input::placeholder,
+.password-form-input::placeholder {
   color: #7b8798;
 }
 
@@ -4744,7 +4792,10 @@ body,
 .qrcode-tool .qrcode-input:focus,
 .textmanager-split-view .textmanager-search:focus,
 .textmanager-split-view .textmanager-title-input:focus,
-.textmanager-split-view .textmanager-textarea:focus {
+.textmanager-split-view .textmanager-textarea:focus,
+.password-search-input:focus,
+.password-domain-input:focus,
+.password-form-input:focus {
   outline: none;
   background: #fff;
   border-color: var(--accent-color);
@@ -5422,5 +5473,126 @@ body,
     gap: 10px;
     padding: 12px 0;
     overflow: hidden;
+  }
+
+  .sub-view.password-split-view {
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .password-sidebar {
+    width: 100%;
+    max-height: 236px;
+    flex-shrink: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    box-shadow: none;
+  }
+
+  .password-domain-list-only .password-sidebar {
+    max-height: none;
+    border-bottom: none;
+  }
+
+  .password-domain-list-only .password-main,
+  .password-detail-only .password-sidebar {
+    display: none;
+  }
+
+  .password-sidebar-header {
+    padding: 12px 12px 8px;
+    gap: 8px;
+  }
+
+  .password-search-wrap,
+  .password-domain-add {
+    padding: 8px 12px 0;
+  }
+
+  .password-domain-list {
+    max-height: 220px;
+    flex: 0 1 auto;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 8px 12px 10px;
+    gap: 6px;
+  }
+
+  .password-domain-item {
+    width: 100%;
+    min-width: 0;
+    min-height: 54px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(76, 96, 130, 0.14);
+    border-radius: 10px;
+    box-shadow: var(--shadow-inner), 0 1px 2px rgba(31, 44, 68, 0.05);
+  }
+
+  .password-domain-item:hover {
+    background: rgba(255, 255, 255, 0.92);
+    border-color: rgba(37, 99, 235, 0.22);
+  }
+
+  .password-domain-item.active {
+    background: rgba(239, 246, 255, 0.96);
+    border-color: rgba(37, 99, 235, 0.36);
+    box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.1);
+  }
+
+  .password-domain-name {
+    color: var(--text-primary);
+  }
+
+  .password-domain-delete,
+  .password-delete-account {
+    opacity: 1;
+  }
+
+  .password-main {
+    flex: 1;
+    min-height: 0;
+    padding: 0 12px;
+  }
+
+  .password-main-header {
+    min-height: auto;
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: center;
+    row-gap: 10px;
+    padding: 12px 0;
+  }
+
+  .password-detail-topbar {
+    width: 100%;
+  }
+
+  .password-domain-back-btn {
+    margin-left: -6px;
+  }
+
+  .password-main-header > div,
+  .password-main-header .sub-view-title,
+  .password-header-meta {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .password-account-form {
+    grid-template-columns: 1fr;
+    padding: 10px;
+  }
+
+  .password-account-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .password-account-actions {
+    flex-wrap: wrap;
   }
 }

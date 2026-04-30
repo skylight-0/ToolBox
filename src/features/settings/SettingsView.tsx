@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import type { DragEvent } from "react";
+import type { DragEvent, MutableRefObject } from "react";
 import SubViewHeader from "../../components/SubViewHeader";
 import type { ToolId, ToolItem } from "../../types/sidebar";
 
@@ -11,10 +11,13 @@ type SettingsViewProps = {
   sidebarWidth: number;
   clipboardMonitoring: boolean;
   clipboardDefaultDateFilter: ClipboardDefaultDateFilter;
+  passwordRequireAuth: boolean;
   tools: ToolItem[];
+  isDialogOpenRef: MutableRefObject<boolean>;
   onSidebarWidthChange: (width: number) => void;
   onClipboardMonitoringChange: (enabled: boolean) => void;
   onClipboardDefaultDateFilterChange: (filter: ClipboardDefaultDateFilter) => void;
+  onPasswordRequireAuthChange: (enabled: boolean) => void;
   onToolOrderChange: (toolIds: ToolId[]) => void;
   onToolOrderReset: () => void;
 };
@@ -30,15 +33,19 @@ function SettingsView({
   sidebarWidth,
   clipboardMonitoring,
   clipboardDefaultDateFilter,
+  passwordRequireAuth,
   tools,
+  isDialogOpenRef,
   onSidebarWidthChange,
   onClipboardMonitoringChange,
   onClipboardDefaultDateFilterChange,
+  onPasswordRequireAuthChange,
   onToolOrderChange,
   onToolOrderReset,
 }: SettingsViewProps) {
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [isLoadingAutostart, setIsLoadingAutostart] = useState(true);
+  const [isUpdatingPasswordAuth, setIsUpdatingPasswordAuth] = useState(false);
   const [settingsError, setSettingsError] = useState("");
   const [draggingToolId, setDraggingToolId] = useState<ToolId | null>(null);
 
@@ -70,6 +77,25 @@ function SettingsView({
       key: "clipboard_default_date_filter",
       value: filter,
     }).catch((error) => setSettingsError(String(error)));
+  };
+
+  const updatePasswordRequireAuth = async (enabled: boolean) => {
+    setSettingsError("");
+    setIsUpdatingPasswordAuth(true);
+    isDialogOpenRef.current = true;
+    try {
+      const authenticated = await invoke<boolean>("authenticate_password_vault");
+      if (!authenticated) {
+        setSettingsError("Windows 用户密码验证未通过或已取消");
+        return;
+      }
+      onPasswordRequireAuthChange(enabled);
+    } catch (error) {
+      setSettingsError(String(error));
+    } finally {
+      isDialogOpenRef.current = false;
+      setIsUpdatingPasswordAuth(false);
+    }
   };
 
   const updateSidebarWidth = (width: number) => {
@@ -138,6 +164,25 @@ function SettingsView({
               checked={autostartEnabled}
               disabled={isLoadingAutostart}
               onChange={(event) => void updateAutostart(event.target.checked)}
+            />
+          </label>
+        </section>
+
+        <section className="app-settings-section">
+          <div className="app-settings-section-header">
+            <h3>密码管理</h3>
+          </div>
+          <label className="app-settings-row">
+            <div>
+              <div className="app-settings-row-title">进入前验证 Windows 用户密码</div>
+              <div className="app-settings-row-description">关闭后进入密码管理工具不再弹出用户密码验证；更改此配置仍需要验证</div>
+            </div>
+            <input
+              type="checkbox"
+              className="app-settings-switch"
+              checked={passwordRequireAuth}
+              disabled={isUpdatingPasswordAuth}
+              onChange={(event) => void updatePasswordRequireAuth(event.target.checked)}
             />
           </label>
         </section>

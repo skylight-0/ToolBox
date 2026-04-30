@@ -825,17 +825,32 @@ fn wide_to_string(buffer: &[u16]) -> String {
     String::from_utf16_lossy(&buffer[..end])
 }
 
+#[cfg(target_os = "windows")]
+fn current_windows_username() -> Result<String, String> {
+    use windows_sys::Win32::System::WindowsProgramming::GetUserNameW;
+
+    unsafe {
+        let mut username = vec![0u16; 256];
+        let mut username_len = username.len() as u32;
+        if GetUserNameW(username.as_mut_ptr(), &mut username_len) == 0 {
+            return std::env::var("USERNAME")
+                .map_err(|e| format!("读取当前 Windows 用户名失败: {}", e));
+        }
+        Ok(wide_to_string(&username))
+    }
+}
+
 #[tauri::command]
 fn authenticate_password_vault() -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     unsafe {
-        use std::{ffi::c_void, mem, ptr};
+        use std::{mem, ptr};
         use windows_sys::Win32::{
             Foundation::{CloseHandle, HANDLE},
             Security::{
                 Credentials::{
-                    CredUIPromptForWindowsCredentialsW, CredUnPackAuthenticationBufferW,
-                    CREDUIWIN_ENUMERATE_CURRENT_USER, CREDUIWIN_SECURE_PROMPT, CREDUI_INFOW,
+                    CredUIPromptForCredentialsW, CREDUI_FLAGS_DO_NOT_PERSIST,
+                    CREDUI_FLAGS_KEEP_USERNAME, CREDUI_INFOW,
                 },
                 LogonUserW, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT,
             },
@@ -843,8 +858,9 @@ fn authenticate_password_vault() -> Result<bool, String> {
 
         const ERROR_CANCELLED: u32 = 1223;
 
-        let message = wide_null("请输入当前 Windows 用户的锁屏密码以打开密码管理工具。");
+        let message = wide_null("请输入当前 Windows 用户密码以打开密码管理工具。");
         let caption = wide_null("ToolBox 密码管理");
+        let target_name = wide_null("ToolBox 密码管理");
         let ui_info = CREDUI_INFOW {
             cbSize: mem::size_of::<CREDUI_INFOW>() as u32,
             hwndParent: ptr::null_mut(),
@@ -853,20 +869,28 @@ fn authenticate_password_vault() -> Result<bool, String> {
             hbmBanner: ptr::null_mut(),
         };
 
-        let mut auth_package = 0u32;
-        let mut out_auth_buffer: *mut c_void = ptr::null_mut();
-        let mut out_auth_buffer_size = 0u32;
+        let current_username = current_windows_username()?;
+        let env_domain = std::env::var("USERDOMAIN").unwrap_or_default();
+        let prompt_username = if current_username.contains('\\') || env_domain.is_empty() {
+            current_username.clone()
+        } else {
+            format!("{}\\{}", env_domain, current_username)
+        };
+        let mut prompt_username_w = wide_null(&prompt_username);
+        prompt_username_w.resize(256, 0);
+        let mut password = vec![0u16; 512];
         let mut save = 0i32;
-        let prompt_result = CredUIPromptForWindowsCredentialsW(
+        let prompt_result = CredUIPromptForCredentialsW(
             &ui_info,
-            0,
-            &mut auth_package,
+            target_name.as_ptr(),
             ptr::null(),
             0,
-            &mut out_auth_buffer,
-            &mut out_auth_buffer_size,
+            prompt_username_w.as_mut_ptr(),
+            prompt_username_w.len() as u32,
+            password.as_mut_ptr(),
+            password.len() as u32,
             &mut save,
-            CREDUIWIN_ENUMERATE_CURRENT_USER | CREDUIWIN_SECURE_PROMPT,
+            CREDUI_FLAGS_DO_NOT_PERSIST | CREDUI_FLAGS_KEEP_USERNAME,
         );
 
         if prompt_result == ERROR_CANCELLED {
@@ -876,32 +900,8 @@ fn authenticate_password_vault() -> Result<bool, String> {
             return Err(format!("系统凭据验证窗口打开失败: {}", prompt_result));
         }
 
-        let mut username = vec![0u16; 256];
-        let mut domain = vec![0u16; 256];
-        let mut password = vec![0u16; 512];
-        let mut username_len = username.len() as u32;
-        let mut domain_len = domain.len() as u32;
-        let mut password_len = password.len() as u32;
-
-        let unpacked = CredUnPackAuthenticationBufferW(
-            0,
-            out_auth_buffer,
-            out_auth_buffer_size,
-            username.as_mut_ptr(),
-            &mut username_len,
-            domain.as_mut_ptr(),
-            &mut domain_len,
-            password.as_mut_ptr(),
-            &mut password_len,
-        );
-        windows_sys::Win32::Security::Credentials::CredFree(out_auth_buffer);
-
-        if unpacked == 0 {
-            return Err("无法读取系统凭据输入".to_string());
-        }
-
-        let mut username_text = wide_to_string(&username);
-        let mut domain_text = wide_to_string(&domain);
+        let mut username_text = current_username;
+        let mut domain_text = env_domain;
         if domain_text.is_empty() {
             if let Some((domain_part, user_part)) = username_text.split_once('\\') {
                 domain_text = domain_part.to_string();
@@ -942,7 +942,7 @@ fn authenticate_password_vault() -> Result<bool, String> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        Err("系统锁屏密码验证仅支持 Windows 平台".to_string())
+        Err("Windows 用户密码验证仅支持 Windows 平台".to_string())
     }
 }
 

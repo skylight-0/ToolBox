@@ -6,6 +6,7 @@ export type ActiveView =
   | "systeminfo"
   | "network"
   | "todo"
+  | "password"
   | "clipboard"
   | "quicklaunch"
   | "textmanager"
