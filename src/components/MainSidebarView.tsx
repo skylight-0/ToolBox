@@ -114,7 +114,6 @@ function MainSidebarView({
   onNotificationRead,
   onNotificationClear,
   onToolClick,
-  onToolOrderManage,
   onSwitchClick,
 }: MainSidebarViewProps) {
   let lastGroup = "";
@@ -316,14 +315,6 @@ function MainSidebarView({
                   {visibleTools.length}/{tools.length}
                 </span>
               )}
-              <button
-                className="tools-manage-btn"
-                type="button"
-                onClick={onToolOrderManage}
-                title="管理功能顺序"
-              >
-                管理
-              </button>
             </div>
           </div>
           <div className="tools-grid">
