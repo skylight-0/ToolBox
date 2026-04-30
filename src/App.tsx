@@ -1,33 +1,314 @@
-import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import "./App.css";
+import MainSidebarView from "./components/MainSidebarView";
+import type { CommandPaletteResult, SidebarNotification } from "./components/MainSidebarView";
+import { TOOLS } from "./constants/sidebar";
+import desktopIcon from "./assets/icon.svg";
+import taskbarIcon from "./assets/task.svg";
+import CodecToolView from "./features/codec/CodecToolView";
+import ClipboardView from "./features/clipboard/ClipboardView";
+import {
+  getClipboardSearchFields,
+  isCodeSnippet,
+  type ClipboardItem as ClipboardSearchItem,
+  type ClipboardRecordInput,
+  normalizeClipboardItems,
+} from "./features/clipboard/clipboardModel";
+import JsonToolView from "./features/json/JsonToolView";
+import NetworkToolView from "./features/network/NetworkToolView";
+import PomodoroView from "./features/pomodoro/PomodoroView";
+import QrCodeView from "./features/qrcode/QrCodeView";
+import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
+import SettingsView from "./features/settings/SettingsView";
+import type { ClipboardDefaultDateFilter } from "./features/settings/SettingsView";
+import SystemInfoView from "./features/systeminfo/SystemInfoView";
+import TextManagerView from "./features/textmanager/TextManagerView";
+import TodoView from "./features/todo/TodoView";
+import { notifyToolboxDataChanged, TOOLBOX_DATA_CHANGED } from "./utils/dataSync";
+import type { ActiveView, ToggleSwitchItem, ToolId, ViewToolId } from "./types/sidebar";
+
+type SearchResultPayload =
+  | { type: "tool"; toolId: ToolId }
+  | { type: "quicklaunch"; target: string; itemType: string; args: string }
+  | { type: "clipboard-text"; content: string }
+  | { type: "clipboard-image"; content: string }
+  | { type: "view"; view: ViewToolId }
+  | { type: "action"; actionKey: string };
+
+type SecondaryAction =
+  | { type: "open-view"; view: ViewToolId }
+  | { type: "none" };
+
+type SearchResult = CommandPaletteResult & {
+  payload: SearchResultPayload;
+  secondaryAction: SecondaryAction;
+  score: number;
+};
+
+type QuickLaunchSearchItem = {
+  id: string;
+  name: string;
+  path: string;
+  icon?: string;
+  alias?: string;
+  itemType?: string;
+  args?: string;
+  groupId?: string;
+  sortOrder?: number;
+  launchCount?: number;
+  lastLaunchedAt?: number;
+};
+
+type TextEntrySearchItem = {
+  id: string;
+  title: string;
+  content: string;
+};
+
+type TodoSearchItem = {
+  id: string;
+  text: string;
+  completed: boolean;
+};
+
+type CommandHistoryEntry = {
+  actionKey: string;
+  title: string;
+  groupName: string;
+  icon: string;
+  meta?: string;
+  payloadJson: string;
+  lastUsedAt: number;
+  useCount: number;
+};
+
+type ToastNotification = SidebarNotification & {
+  visible: boolean;
+};
+
+const CLIPBOARD_TEXT_POLL_INTERVAL = 500;
+const CLIPBOARD_IMAGE_POLL_INTERVAL = 2000;
+const TOOL_ORDER_SETTING_KEY = "tool_order";
+const DEFAULT_TOOL_ORDER = TOOLS.map((tool) => tool.id);
+
+function normalizeToolOrder(toolIds: unknown): ToolId[] {
+  const validToolIds = new Set(TOOLS.map((tool) => tool.id));
+  const seenToolIds = new Set<ToolId>();
+  const normalizedOrder: ToolId[] = [];
+
+  if (Array.isArray(toolIds)) {
+    for (const value of toolIds) {
+      if (typeof value !== "string") continue;
+
+      const toolId = value as ToolId;
+      if (!validToolIds.has(toolId) || seenToolIds.has(toolId)) continue;
+
+      seenToolIds.add(toolId);
+      normalizedOrder.push(toolId);
+    }
+  }
+
+  for (const defaultToolId of DEFAULT_TOOL_ORDER) {
+    if (!seenToolIds.has(defaultToolId)) {
+      normalizedOrder.push(defaultToolId);
+    }
+  }
+
+  return normalizedOrder;
+}
+
+function parseToolOrderSetting(value: string | null) {
+  if (!value) return DEFAULT_TOOL_ORDER;
+
+  try {
+    return normalizeToolOrder(JSON.parse(value));
+  } catch {
+    return DEFAULT_TOOL_ORDER;
+  }
+}
+
+function getSearchScore(fields: string[], query: string) {
+  if (!query) return 0;
+
+  let bestScore = -1;
+  for (const field of fields) {
+    const value = field.toLowerCase();
+    const index = value.indexOf(query);
+    if (index === -1) continue;
+
+    let score = 40 - index;
+    if (value === query) score += 70;
+    if (value.startsWith(query)) score += 35;
+    if (value.split(/\s+/).some((part) => part.startsWith(query))) score += 18;
+    bestScore = Math.max(bestScore, score);
+  }
+
+  return bestScore;
+}
+
+function shortenText(value: string, limit: number) {
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  if (!collapsed) return "";
+  return collapsed.length > limit ? `${collapsed.slice(0, limit)}...` : collapsed;
+}
+
+async function writeClipboardText(content: string) {
+  const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+  await writeText(content);
+}
+
+async function writeClipboardImage(dataUrl: string) {
+  const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
+  const base64Data = dataUrl.split(",")[1];
+  const binaryString = atob(base64Data);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let index = 0; index < binaryString.length; index += 1) {
+    bytes[index] = binaryString.charCodeAt(index);
+  }
+  await writeImage(bytes);
+}
+
+async function readClipboardImageAsDataUrl(readImage: () => Promise<unknown>) {
+  const imageData = await readImage();
+  if (!imageData || typeof imageData !== "object") return "";
+
+  const image = imageData as {
+    rgba: () => Promise<ArrayBuffer | Uint8Array | number[]>;
+    size: () => Promise<{ width: number; height: number }>;
+  };
+  const rgba = await image.rgba();
+  const size = await image.size();
+  const bytes = new Uint8Array(rgba as ArrayBuffer);
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) return "";
+
+  const imgData = ctx.createImageData(size.width, size.height);
+  imgData.data.set(bytes);
+  ctx.putImageData(imgData, 0, 0);
+  return canvas.toDataURL("image/png");
+}
 
 function App() {
   const [sidebarWidth, setSidebarWidth] = useState(400);
+  const [previewWidth, setPreviewWidth] = useState<number | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
+  const [isOpening, setIsOpening] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [activeView, setActiveView] = useState<ActiveView>("main");
+  const [commandQuery, setCommandQuery] = useState("");
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
+  const [commandFilter, setCommandFilter] = useState("all");
+  const [quickLaunchSearchItems, setQuickLaunchSearchItems] = useState<QuickLaunchSearchItem[]>([]);
+  const [clipboardSearchItems, setClipboardSearchItems] = useState<ClipboardSearchItem[]>([]);
+  const [isClipboardMonitoring, setIsClipboardMonitoring] = useState(true);
+  const [clipboardDefaultDateFilter, setClipboardDefaultDateFilter] = useState<ClipboardDefaultDateFilter>("today");
+  const [toolOrder, setToolOrder] = useState<ToolId[]>(DEFAULT_TOOL_ORDER);
+  const [textSearchEntries, setTextSearchEntries] = useState<TextEntrySearchItem[]>([]);
+  const [todoSearchItems, setTodoSearchItems] = useState<TodoSearchItem[]>([]);
+  const [commandHistory, setCommandHistory] = useState<CommandHistoryEntry[]>([]);
+  const [notifications, setNotifications] = useState<SidebarNotification[]>([]);
+  const [toastNotifications, setToastNotifications] = useState<ToastNotification[]>([]);
+  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
+  const [switchStates, setSwitchStates] = useState<Record<ToggleSwitchItem["id"], boolean>>({
+    desktop: true,
+    taskbar: true,
+  });
+  const [pendingSwitches, setPendingSwitches] = useState<
+    Record<ToggleSwitchItem["id"], boolean>
+  >({
+    desktop: false,
+    taskbar: false,
+  });
+
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const activeViewRef = useRef<ActiveView>("main");
+  const isCommandPaletteOpenRef = useRef(false);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
-  const sidebarRef = useRef<HTMLDivElement>(null);
-
-  // 动画状态
-  const [isClosing, setIsClosing] = useState(false);
-  const [isOpening, setIsOpening] = useState(false);
-
-  // 文件对话框打开标记，防止对话框打开时侧边栏自动隐藏
+  const previewWidthRef = useRef<number | null>(null);
   const isDialogOpenRef = useRef(false);
+  const lastClipboardContentRef = useRef("");
+  const clipboardCheckInFlightRef = useRef(false);
+  const lastClipboardImageCheckAtRef = useRef(0);
+  const commandFilters = [
+    { id: "all", label: "全部" },
+    { id: "actions", label: "动作" },
+    { id: "programs", label: "程序" },
+    { id: "clipboard", label: "剪贴板" },
+    { id: "text", label: "文本" },
+    { id: "todos", label: "待办" },
+  ];
 
-  // 监听后端发来的显隐事件以及窗口失焦（也就是点击了桌面或其他地方）
+  const unreadNotificationCount = notifications.filter((item) => !item.read).length;
+  const orderedTools = useMemo(() => {
+    const toolById = new Map(TOOLS.map((tool) => [tool.id, tool]));
+    return normalizeToolOrder(toolOrder).flatMap((toolId) => {
+      const tool = toolById.get(toolId);
+      return tool ? [tool] : [];
+    });
+  }, [toolOrder]);
+
+  const appendToast = (notification: SidebarNotification) => {
+    setToastNotifications((current) => {
+      const next = [...current, { ...notification, visible: true }].slice(-3);
+      return next;
+    });
+    if (notification.level !== "error") {
+      window.setTimeout(() => {
+        setToastNotifications((current) => current.filter((item) => item.id !== notification.id));
+      }, 3500);
+    }
+  };
+
+  const loadMetaData = () => {
+    void Promise.all([
+      invoke<CommandHistoryEntry[]>("get_command_history"),
+      invoke<SidebarNotification[]>("get_notification_history"),
+    ])
+      .then(([history, notificationItems]) => {
+        setCommandHistory(history || []);
+        setNotifications(notificationItems || []);
+      })
+      .catch(console.error);
+  };
+
+  const finishDragging = (commitWidth: boolean) => {
+    if (!isDragging.current) return;
+
+    isDragging.current = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+
+    const finalWidth = previewWidthRef.current;
+    if (commitWidth && finalWidth !== null) {
+      const width = Math.round(finalWidth);
+      setSidebarWidth(width);
+      void invoke("resize_sidebar", { width });
+    }
+
+    previewWidthRef.current = null;
+    setPreviewWidth(null);
+  };
+
   useEffect(() => {
     let isCurrentlyClosing = false;
     let hideTimeoutId: number | null = null;
 
     const triggerHide = () => {
-      if (isCurrentlyClosing || isDialogOpenRef.current) return;
+      if (isCurrentlyClosing || isDialogOpenRef.current || isDragging.current) return;
       isCurrentlyClosing = true;
       setIsClosing(true);
 
-      // 离场动画播放完后，通知后端真正隐藏窗口
       if (hideTimeoutId !== null) window.clearTimeout(hideTimeoutId);
       hideTimeoutId = window.setTimeout(() => {
         setIsClosing(false);
@@ -38,75 +319,72 @@ function App() {
     };
 
     const unlistenShow = listen("show-sidebar", () => {
-      // 停止上一轮还没走完的离场销毁逻辑（防止打开时立刻被藏起来）
       if (hideTimeoutId !== null) {
         window.clearTimeout(hideTimeoutId);
         hideTimeoutId = null;
       }
       setIsClosing(false);
       isCurrentlyClosing = false;
-
       setIsOpening(true);
-      // 等待进场动画结束后移除状态
-      setTimeout(() => setIsOpening(false), 300);
+      window.setTimeout(() => setIsOpening(false), 300);
     });
 
-    const unlistenHide = listen("hide-sidebar", () => {
-      triggerHide();
-    });
-
-    // 窗口失去系统焦点时自动隐藏（即“点击了侧边栏外”）
+    const unlistenHide = listen("hide-sidebar", triggerHide);
     const unlistenBlur = listen("tauri://blur", () => {
+      finishDragging(true);
       triggerHide();
     });
 
     return () => {
-      unlistenShow.then(f => f());
-      unlistenHide.then(f => f());
-      unlistenBlur.then(f => f());
+      unlistenShow.then((fn) => fn());
+      unlistenHide.then((fn) => fn());
+      unlistenBlur.then((fn) => fn());
       if (hideTimeoutId !== null) window.clearTimeout(hideTimeoutId);
     };
   }, []);
 
-  // 拖拽预览状态：拖拽中显示预览线，松手后才真正改变宽度
-  const [previewWidth, setPreviewWidth] = useState<number | null>(null);
-
-  // 拖拽开始
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    isDragging.current = true;
-    dragStartX.current = e.screenX;
-    dragStartWidth.current = sidebarWidth;
-    document.body.style.cursor = "ew-resize";
-    document.body.style.userSelect = "none";
-    e.preventDefault();
-  }, [sidebarWidth]);
+  useEffect(() => {
+    loadMetaData();
+    void Promise.all([
+      invoke<string | null>("get_setting", { key: "clipboard_monitoring" }),
+      invoke<string | null>("get_setting", { key: "clipboard_default_date_filter" }),
+      invoke<string | null>("get_setting", { key: TOOL_ORDER_SETTING_KEY }),
+    ])
+      .then(([monitoringValue, dateFilterValue, toolOrderValue]) => {
+        if (monitoringValue === "false") {
+          setIsClipboardMonitoring(false);
+        }
+        if (
+          dateFilterValue === "today" ||
+          dateFilterValue === "last7" ||
+          dateFilterValue === "all"
+        ) {
+          setClipboardDefaultDateFilter(dateFilterValue);
+        }
+        setToolOrder(parseToolOrderSetting(toolOrderValue));
+      })
+      .catch(console.error);
+    const unlistenAppNotification = listen<SidebarNotification>("app-notification", (event) => {
+      const notification = event.payload;
+      setNotifications((current) => [notification, ...current.filter((item) => item.id !== notification.id)].slice(0, 50));
+      appendToast(notification);
+    });
+    return () => {
+      unlistenAppNotification.then((fn) => fn());
+    };
+  }, []);
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
+    const handleMouseMove = (event: MouseEvent) => {
       if (!isDragging.current) return;
-      // 向左拖拽增大宽度（因为侧边栏在右侧）
-      const delta = dragStartX.current - e.screenX;
+      const delta = dragStartX.current - event.screenX;
       const newWidth = Math.max(280, Math.min(1200, dragStartWidth.current + delta));
-      // 只更新预览宽度，不实际调整窗口
+      previewWidthRef.current = newWidth;
       setPreviewWidth(newWidth);
     };
 
     const handleMouseUp = () => {
-      if (isDragging.current) {
-        isDragging.current = false;
-        document.body.style.cursor = "";
-        document.body.style.userSelect = "";
-
-        // 松手时才真正调整窗口宽度
-        setPreviewWidth((finalWidth) => {
-          if (finalWidth !== null) {
-            const w = Math.round(finalWidth);
-            setSidebarWidth(w);
-            invoke("resize_sidebar", { width: w });
-          }
-          return null;
-        });
-      }
+      finishDragging(true);
     };
 
     document.addEventListener("mousemove", handleMouseMove);
@@ -114,14 +392,108 @@ function App() {
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
+      finishDragging(false);
     };
   }, []);
 
-  // 当前时间
-  const [currentTime, setCurrentTime] = useState(new Date());
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    if (activeView !== "main") return;
+
+    setCurrentTime(new Date());
+    const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, [activeView]);
+
+  useEffect(() => {
+    activeViewRef.current = activeView;
+  }, [activeView]);
+
+  useEffect(() => {
+    isCommandPaletteOpenRef.current = isCommandPaletteOpen;
+  }, [isCommandPaletteOpen]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && isCommandPaletteOpenRef.current) {
+        event.preventDefault();
+        setCommandQuery("");
+        setIsCommandPaletteOpen(false);
+        searchInputRef.current?.blur();
+        return;
+      }
+
+      if (event.key === "Escape" && activeViewRef.current !== "main") {
+        event.preventDefault();
+        setActiveView("main");
+        return;
+      }
+
+      if (event.ctrlKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setActiveView("main");
+        openCommandPalette();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const loadQuickLaunchSearchData = () =>
+      invoke<{ groups: QuickLaunchSearchItem[]; items: QuickLaunchSearchItem[] }>("get_quicklaunch_data")
+        .then((data) => setQuickLaunchSearchItems(data.items || []));
+
+    const loadClipboardSearchData = () =>
+      invoke<ClipboardSearchItem[]>("get_clipboard_history")
+        .then((data) => setClipboardSearchItems(normalizeClipboardItems(data)));
+
+    const loadTextSearchData = () =>
+      invoke<{ groups: unknown[]; entries: TextEntrySearchItem[] }>("get_text_manager_data")
+        .then((data) => setTextSearchEntries(data.entries || []));
+
+    const loadTodoSearchData = () =>
+      invoke<TodoSearchItem[]>("get_todos")
+        .then((data) => setTodoSearchItems(data || []));
+
+    const loadUnifiedSearchData = () => {
+      void Promise.all([
+        loadQuickLaunchSearchData(),
+        loadClipboardSearchData(),
+        loadTextSearchData(),
+        loadTodoSearchData(),
+      ]).catch(console.error);
+    };
+
+    loadUnifiedSearchData();
+    const handleDataChanged = (event: Event) => {
+      const kind = (event as CustomEvent<{ kind?: string }>).detail?.kind;
+
+      if (kind === "clipboard") {
+        void loadClipboardSearchData().catch(console.error);
+        return;
+      }
+      if (kind === "quicklaunch") {
+        void loadQuickLaunchSearchData().catch(console.error);
+        return;
+      }
+      if (kind === "textmanager") {
+        void loadTextSearchData().catch(console.error);
+        return;
+      }
+      if (kind === "todos") {
+        void loadTodoSearchData().catch(console.error);
+        return;
+      }
+
+      loadUnifiedSearchData();
+      if (kind === "notifications") {
+        loadMetaData();
+      }
+    };
+    window.addEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
+    return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
+  }, []);
   }, []);
 
   const formatTime = (date: Date) => {
@@ -284,6 +656,275 @@ function App() {
   const [editingTodoText, setEditingTodoText] = useState("");
 
   useEffect(() => {
+    if (!isClipboardMonitoring) return;
+
+    const insertRecord = async (record: ClipboardRecordInput) => {
+      const inserted = await invoke<boolean>("insert_clipboard_record", { record });
+      if (inserted) {
+        notifyToolboxDataChanged("clipboard");
+      }
+    };
+
+    const checkClipboard = async () => {
+      if (clipboardCheckInFlightRef.current) return;
+      clipboardCheckInFlightRef.current = true;
+
+      try {
+        const { readText, readImage } = await import("@tauri-apps/plugin-clipboard-manager");
+
+        let hasReadableText = false;
+        let insertedText = false;
+        try {
+          const newText = (await readText()) || "";
+          hasReadableText = newText.length > 0;
+          if (newText && newText !== lastClipboardContentRef.current) {
+            lastClipboardContentRef.current = newText;
+            insertedText = true;
+            await insertRecord({
+              id: crypto.randomUUID(),
+              type: "text",
+              content: newText.slice(0, 10000),
+              timestamp: Date.now(),
+              favorite: false,
+              pinned: false,
+              tags: [],
+              group: isCodeSnippet(newText) ? "snippet" : "general",
+            });
+          }
+        } catch {}
+
+        const now = Date.now();
+        if (
+          insertedText ||
+          (hasReadableText && now - lastClipboardImageCheckAtRef.current < CLIPBOARD_IMAGE_POLL_INTERVAL)
+        ) {
+          return;
+        }
+        if (now - lastClipboardImageCheckAtRef.current < CLIPBOARD_IMAGE_POLL_INTERVAL) {
+          return;
+        }
+        lastClipboardImageCheckAtRef.current = now;
+
+        try {
+          const imageContent = await readClipboardImageAsDataUrl(readImage);
+          if (imageContent && imageContent !== lastClipboardContentRef.current) {
+            lastClipboardContentRef.current = imageContent;
+            await insertRecord({
+              id: crypto.randomUUID(),
+              type: "image",
+              content: imageContent,
+              timestamp: Date.now(),
+              favorite: false,
+              pinned: false,
+              tags: [],
+              group: "general",
+            });
+          }
+        } catch {}
+      } catch (error) {
+        console.error(error);
+      } finally {
+        clipboardCheckInFlightRef.current = false;
+      }
+    };
+
+    void checkClipboard();
+    const interval = window.setInterval(() => {
+      void checkClipboard();
+    }, CLIPBOARD_TEXT_POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [isClipboardMonitoring]);
+
+  const actionResults = useMemo<SearchResult[]>(() => {
+    const actions: SearchResult[] = [
+      {
+        id: "action-open-codec",
+        icon: "🔁",
+        title: "打开编码转换",
+        subtitle: "Base64 与 URL 编码解码",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "codec" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-qrcode",
+        icon: "▦",
+        title: "打开二维码生成器",
+        subtitle: "把文本或链接生成二维码",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "qrcode" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-systeminfo",
+        icon: "▥",
+        title: "打开本机信息",
+        subtitle: "查看 CPU、内存、磁盘与网络",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "systeminfo" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-network",
+        icon: "◌",
+        title: "打开网络小工具",
+        subtitle: "DNS 解析、Ping 与端口检测",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "network" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-clipboard",
+        icon: "📋",
+        title: "打开剪贴板",
+        subtitle: "进入剪贴板模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "clipboard" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-quicklaunch",
+        icon: "📌",
+        title: "打开快捷访问",
+        subtitle: "进入快捷访问模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "quicklaunch" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-textmanager",
+        icon: "🗂️",
+        title: "打开文本管理",
+        subtitle: "进入文本管理模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "textmanager" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-todo",
+        icon: "☑️",
+        title: "打开待办",
+        subtitle: "进入待办模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "todo" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-pomodoro",
+        icon: "🍅",
+        title: "打开番茄钟",
+        subtitle: "进入番茄钟模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "pomodoro" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-settings",
+        icon: "⚙️",
+        title: "打开设置",
+        subtitle: "进入设置页面",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "settings" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-toggle-desktop",
+        icon: "👁️",
+        title: switchStates.desktop ? "隐藏桌面图标" : "显示桌面图标",
+        subtitle: "切换桌面图标显示状态",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "action", actionKey: "toggle-desktop" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-toggle-taskbar",
+        icon: "🚀",
+        title: switchStates.taskbar ? "隐藏任务栏" : "显示任务栏",
+        subtitle: "切换任务栏显示状态",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "action", actionKey: "toggle-taskbar" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-clear-clipboard",
+        icon: "🧹",
+        title: "清空剪贴板历史",
+        subtitle: "保留收藏和置顶项",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "action", actionKey: "clear-clipboard" },
+        secondaryAction: { type: "open-view", view: "clipboard" },
+        score: 40,
+      },
+    ];
+    return actions;
+  }, [switchStates.desktop, switchStates.taskbar]);
+
+  const commandResults = useMemo<SearchResult[]>(() => {
+    const query = commandQuery.trim().toLowerCase();
+    const quickLaunchItems = quickLaunchSearchItems;
+    const clipboardItems = clipboardSearchItems;
+    const textEntries = textSearchEntries;
+    const todoItems = todoSearchItems;
+
+    const historyResults: SearchResult[] = commandHistory
+      .slice(0, 4)
+      .flatMap((entry, index) => {
+        try {
+          const parsedPayload = JSON.parse(entry.payloadJson) as SearchResultPayload;
+          return [{
+            id: `history-${entry.actionKey}`,
+            icon: entry.icon,
+            title: entry.title,
+            subtitle: entry.meta || "最近执行",
+            meta: "最近执行",
+            group: "最近执行",
+            category: "actions",
+            payload: parsedPayload,
+            secondaryAction: { type: "none" },
+            score: 120 - index,
+          }];
+        } catch {
+          return [];
+        }
+      });
     localStorage.setItem("toolbox_todos", JSON.stringify(todos));
   }, [todos]);
 
@@ -706,687 +1347,588 @@ function App() {
     }
   });
 
+    if (!query) {
+      const suggestions: SearchResult[] = [
+        ...historyResults,
+        ...quickLaunchItems
+          .filter((item) => (item.launchCount || 0) > 0)
+          .sort((left, right) => (right.lastLaunchedAt || 0) - (left.lastLaunchedAt || 0))
+          .slice(0, 4)
+          .map<SearchResult>((item, index) => ({
+            id: `suggest-quicklaunch-${item.id}`,
+            icon: item.icon ? "📌" : item.itemType === "folder" ? "📁" : item.itemType === "url" ? "🌐" : item.itemType === "script" ? "🧾" : "📄",
+            title: item.alias ? `${item.alias} · ${item.name}` : item.name,
+            subtitle: shortenText(item.path, 48),
+            meta: "快捷启动",
+            group: "最近使用",
+            category: "programs",
+            hint: index === 0 ? "Enter" : undefined,
+            secondaryHint: "打开模块",
+            payload: { type: "quicklaunch", target: item.path, itemType: item.itemType || "app", args: item.args || "" },
+            secondaryAction: { type: "open-view", view: "quicklaunch" },
+            score: 100 - index,
+          })),
+        ...clipboardItems
+          .filter((item) => item.type === "text" && item.favorite)
+          .sort((left, right) => right.timestamp - left.timestamp)
+          .slice(0, 3)
+          .map<SearchResult>((item, index) => ({
+            id: `suggest-clipboard-${item.id}`,
+            icon: "⭐",
+            title: shortenText(item.content, 32) || "收藏文本",
+            subtitle: shortenText(item.content, 70),
+            meta: "复制文本",
+            group: "剪贴板收藏",
+            category: "clipboard",
+            secondaryHint: "打开模块",
+            payload: { type: "clipboard-text", content: item.content },
+            secondaryAction: { type: "open-view", view: "clipboard" },
+            score: 80 - index,
+          })),
+        ...actionResults.slice(0, 4).map((action, index) => ({ ...action, score: 60 - index })),
+      ];
+
+      return suggestions
+        .filter((result) => commandFilter === "all" || result.category === commandFilter)
+        .slice(0, 12);
+    }
+
+    const toolResults: SearchResult[] = [...actionResults]
+      .map((action) => ({
+        ...action,
+        score: getSearchScore([action.title, action.subtitle], query),
+      }))
+      .filter((entry) => entry.score >= 0);
+
+    const quickLaunchResults: SearchResult[] = quickLaunchItems
+      .map((item) => ({
+        item,
+        score: getSearchScore([item.alias || "", item.name, item.path, item.args || ""], query),
+      }))
+      .filter((entry) => entry.score >= 0)
+      .sort((left, right) => {
+        const usageDelta =
+          ((right.item.lastLaunchedAt || 0) + (right.item.launchCount || 0) * 500) -
+          ((left.item.lastLaunchedAt || 0) + (left.item.launchCount || 0) * 500);
+        return right.score - left.score || usageDelta;
+      })
+      .slice(0, 5)
+      .map(({ item, score }) => ({
+        id: `quicklaunch-${item.id}`,
+        icon: item.icon ? "📌" : item.itemType === "folder" ? "📁" : item.itemType === "url" ? "🌐" : item.itemType === "script" ? "🧾" : "📄",
+        title: item.alias ? `${item.alias} · ${item.name}` : item.name,
+        subtitle: shortenText(item.path, 46),
+        meta: "快捷启动",
+        group: "程序与别名",
+        category: "programs",
+        hint: item.alias ? `@${item.alias}` : undefined,
+        secondaryHint: "打开模块",
+        payload: { type: "quicklaunch", target: item.path, itemType: item.itemType || "app", args: item.args || "" },
+        secondaryAction: { type: "open-view", view: "quicklaunch" },
+        score,
+      }));
+
+    const clipboardResults: SearchResult[] = clipboardItems
+      .map((item) => ({
+        item,
+        score: item.type === "text" ? getSearchScore(getClipboardSearchFields(item), query) : -1,
+      }))
+      .filter((entry) => entry.item.type === "text" && entry.score >= 0)
+      .sort((left, right) => {
+        if (left.item.favorite && !right.item.favorite) return -1;
+        if (!left.item.favorite && right.item.favorite) return 1;
+        if (left.item.pinned && !right.item.pinned) return -1;
+        if (!left.item.pinned && right.item.pinned) return 1;
+        return right.score - left.score || right.item.timestamp - left.item.timestamp;
+      })
+      .slice(0, 4)
+      .map(({ item, score }) => ({
+        id: `clipboard-${item.id}`,
+        icon: item.pinned ? "📌" : item.favorite ? "⭐" : item.group === "snippet" ? "🧩" : "📋",
+        title: shortenText(item.content, 32) || "剪贴板文本",
+        subtitle: shortenText(item.content, 70),
+        meta: item.group === "snippet" ? "代码片段" : "复制文本",
+        group: "剪贴板",
+        category: "clipboard",
+        hint: item.pinned ? "置顶" : item.favorite ? "收藏" : item.tags?.[0] ? `#${item.tags[0]}` : undefined,
+        secondaryHint: "打开模块",
+        payload: { type: "clipboard-text", content: item.content },
+        secondaryAction: { type: "open-view", view: "clipboard" },
+        score,
+      }));
+
+    const textResults: SearchResult[] = textEntries
+      .map((item) => ({
+        item,
+        score: getSearchScore([item.title, item.content], query),
+      }))
+      .filter((entry) => entry.score >= 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 3)
+      .map(({ item, score }) => ({
+        id: `text-${item.id}`,
+        icon: "🗂️",
+        title: item.title || "未命名文本",
+        subtitle: shortenText(item.content, 70),
+        meta: "打开文本管理",
+        group: "文本",
+        category: "text",
+        payload: { type: "view", view: "textmanager" },
+        secondaryAction: { type: "open-view", view: "textmanager" },
+        score,
+      }));
+
+    const todoResults: SearchResult[] = todoItems
+      .map((item) => ({
+        item,
+        score: getSearchScore([item.text], query),
+      }))
+      .filter((entry) => entry.score >= 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 3)
+      .map(({ item, score }) => ({
+        id: `todo-${item.id}`,
+        icon: item.completed ? "✅" : "☑️",
+        title: item.text,
+        subtitle: item.completed ? "已完成待办" : "待办事项",
+        meta: "打开待办",
+        group: "待办",
+        category: "todos",
+        payload: { type: "view", view: "todo" },
+        secondaryAction: { type: "open-view", view: "todo" },
+        score,
+      }));
+
+    const groupOrder = ["动作", "程序与别名", "剪贴板", "文本", "待办"];
+
+    return [...toolResults, ...quickLaunchResults, ...clipboardResults, ...textResults, ...todoResults]
+      .filter((result) => commandFilter === "all" || result.category === commandFilter)
+      .sort((left, right) => {
+        const groupDelta = groupOrder.indexOf(left.group) - groupOrder.indexOf(right.group);
+        return groupDelta || right.score - left.score;
+      })
+      .slice(0, 12);
+  }, [actionResults, clipboardSearchItems, commandFilter, commandHistory, commandQuery, quickLaunchSearchItems, textSearchEntries, todoSearchItems]);
+
   useEffect(() => {
-    localStorage.setItem("toolbox_quicklaunch_groups", JSON.stringify(quickLaunchGroups));
-  }, [quickLaunchGroups]);
-
-  useEffect(() => {
-    localStorage.setItem("toolbox_quicklaunch", JSON.stringify(quickLaunchItems));
-  }, [quickLaunchItems]);
-
-  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
-  const [editingGroupName, setEditingGroupName] = useState("");
-  const [isAddingGroup, setIsAddingGroup] = useState(false);
-  const [newGroupName, setNewGroupName] = useState("");
-
-  const saveEditGroup = (id: string) => {
-    if (editingGroupName.trim()) {
-      setQuickLaunchGroups(prev => prev.map(g => g.id === id ? { ...g, name: editingGroupName.trim() } : g));
+    if (!isCommandPaletteOpen) {
+      setSelectedCommandId(null);
+      return;
     }
-    setEditingGroupId(null);
-  };
 
-  const saveNewGroup = () => {
-    if (newGroupName.trim()) {
-      const id = Date.now().toString();
-      setQuickLaunchGroups(prev => [...prev, { id, name: newGroupName.trim() }]);
-      setActiveGroupId(id);
-    }
-    setIsAddingGroup(false);
-    setNewGroupName("");
-  };
-
-  const deleteGroup = (groupId: string) => {
-    setQuickLaunchItems(prev => prev.map(item => item.groupId === groupId ? { ...item, groupId: "default" } : item));
-    setQuickLaunchGroups(prev => prev.filter(g => g.id !== groupId));
-    if (activeGroupId === groupId) {
-      setActiveGroupId("default");
-    }
-  };
-
-  const addQuickLaunchItem = async () => {
-    isDialogOpenRef.current = true;
-    try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        multiple: true,
-        title: "选择要添加的程序",
-        filters: [
-          { name: "可执行程序", extensions: ["exe", "lnk", "bat", "cmd", "msc"] },
-          { name: "所有文件", extensions: ["*"] },
-        ],
-      });
-
-      if (selected) {
-        const paths = Array.isArray(selected) ? selected : [selected];
-        for (const filePath of paths) {
-          const fileName = filePath.split("\\").pop() || filePath;
-          const name = fileName.replace(/\.\w+$/, "");
-          const id = Date.now().toString() + Math.random().toString(36).slice(2);
-
-          setQuickLaunchItems(prev => [...prev, { id, name, path: filePath, groupId: activeGroupId }]);
-
-          // 异步提取程序图标
-          invoke<string>("extract_program_icon", { path: filePath })
-            .then((icon) => {
-              setQuickLaunchItems(prev =>
-                prev.map(item => item.id === id ? { ...item, icon } : item)
-              );
-            })
-            .catch(() => {});
-        }
+    setSelectedCommandId((current) => {
+      if (current && commandResults.some((result) => result.id === current)) {
+        return current;
       }
-    } finally {
-      isDialogOpenRef.current = false;
-    }
+      return commandResults[0]?.id ?? null;
+    });
+  }, [commandResults, isCommandPaletteOpen]);
+
+  const handleMouseDown = (event: ReactMouseEvent) => {
+    isDragging.current = true;
+    dragStartX.current = event.screenX;
+    dragStartWidth.current = sidebarWidth;
+    previewWidthRef.current = sidebarWidth;
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
   };
 
-  const removeQuickLaunchItem = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setQuickLaunchItems(prev => prev.filter(item => item.id !== id));
+  const updateSidebarWidth = (width: number) => {
+    const nextWidth = Math.max(280, Math.min(1200, Math.round(width)));
+    setSidebarWidth(nextWidth);
+    void invoke("resize_sidebar", { width: nextWidth }).catch(console.error);
   };
 
-  const launchProgram = (path: string) => {
-    invoke("launch_program", { path }).catch(console.error);
+  const updateClipboardMonitoring = (value: boolean | ((current: boolean) => boolean)) => {
+    setIsClipboardMonitoring((current) => {
+      const next = typeof value === "function" ? value(current) : value;
+      void invoke("set_setting", {
+        key: "clipboard_monitoring",
+        value: next ? "true" : "false",
+      }).catch(console.error);
+      return next;
+    });
   };
 
-  const renderQuickLaunchView = () => {
-    const currentItems = quickLaunchItems.filter(item => (item.groupId || "default") === activeGroupId);
-    const activeGroupName = quickLaunchGroups.find(g => g.id === activeGroupId)?.name || "快捷访问";
-
-    return (
-      <div className="sub-view quicklaunch-split-view">
-        {/* 左侧垂直侧栏 */}
-        <div className="sub-view-sidebar">
-          <div className="sub-view-sidebar-header">
-            <div className="back-btn" onClick={() => setActiveView("main")}>
-              <span className="back-icon">←</span> 返回
-            </div>
-            <h2 className="sub-view-title">分类分组</h2>
-          </div>
-          <div className="quicklaunch-nav">
-            {quickLaunchGroups.map(group => (
-              <div 
-                key={group.id} 
-                className={`quicklaunch-nav-item ${activeGroupId === group.id ? 'active' : ''}`}
-                onClick={() => setActiveGroupId(group.id)}
-                onDoubleClick={() => {
-                  if (group.id !== "default") {
-                    setEditingGroupId(group.id);
-                    setEditingGroupName(group.name);
-                  }
-                }}
-              >
-                {editingGroupId === group.id ? (
-                  <input
-                    autoFocus
-                    className="quicklaunch-nav-input"
-                    value={editingGroupName}
-                    onChange={e => setEditingGroupName(e.target.value)}
-                    onBlur={() => saveEditGroup(group.id)}
-                    onKeyDown={e => e.key === 'Enter' && saveEditGroup(group.id)}
-                  />
-                ) : (
-                  <>
-                    <span className="nav-text" title={group.name}>{group.name}</span>
-                    {group.id !== "default" && (
-                      <span className="nav-delete" title="删除分组" onClick={(e) => { e.stopPropagation(); deleteGroup(group.id); }}>×</span>
-                    )}
-                  </>
-                )}
-              </div>
-            ))}
-            {isAddingGroup ? (
-              <input
-                className="quicklaunch-nav-input add-input"
-                autoFocus
-                placeholder="命名(回车)"
-                value={newGroupName}
-                onChange={e => setNewGroupName(e.target.value)}
-                onBlur={saveNewGroup}
-                onKeyDown={e => e.key === 'Enter' && saveNewGroup()}
-              />
-            ) : (
-              <div className="quicklaunch-nav-item add-btn" title="新建分组" onClick={() => setIsAddingGroup(true)}>
-                + 新建
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* 右侧主内容 */}
-        <div className="sub-view-main">
-          <div className="sub-view-main-header">
-            <h2 className="sub-view-title active-group-title">{activeGroupName}</h2>
-            <button className="add-program-btn" onClick={addQuickLaunchItem}>+ 添加程序</button>
-          </div>
-          <div className="sub-view-content quicklaunch-container">
-            {currentItems.length === 0 ? (
-              <div className="quicklaunch-empty">
-                此分组还没有添加程序
-              </div>
-            ) : (
-              <div className="quicklaunch-grid">
-                {currentItems.map(item => (
-                  <div
-                    key={item.id}
-                    className="quicklaunch-item"
-                    onClick={() => launchProgram(item.path)}
-                    title={item.path}
-                  >
-                    <button
-                      className="quicklaunch-delete-btn"
-                      onClick={(e) => removeQuickLaunchItem(item.id, e)}
-                      title="移除"
-                    >
-                      ×
-                    </button>
-                    <div className="quicklaunch-icon">
-                      {item.icon ? (
-                        <img src={item.icon} alt={item.name} draggable={false} />
-                      ) : (
-                        <span className="quicklaunch-default-icon">📄</span>
-                      )}
-                    </div>
-                    <span className="quicklaunch-name">{item.name}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    );
+  const updateToolOrder = (nextOrder: ToolId[]) => {
+    const normalizedOrder = normalizeToolOrder(nextOrder);
+    setToolOrder(normalizedOrder);
+    void invoke("set_setting", {
+      key: TOOL_ORDER_SETTING_KEY,
+      value: JSON.stringify(normalizedOrder),
+    }).catch(console.error);
   };
 
-  // ============================================
-  // 剪切板增强逻辑
-  // ============================================
-  type ClipboardItem = { id: string; type: 'text' | 'image'; content: string; timestamp: number };
-  const [clipboardHistory, setClipboardHistory] = useState<ClipboardItem[]>(() => {
+  const resetToolOrder = () => {
+    updateToolOrder(DEFAULT_TOOL_ORDER);
+  };
+
+  const handleToolClick = async (toolId: ToolId) => {
+    const tool = TOOLS.find((item) => item.id === toolId);
+    if (!tool) return;
+
+    setActiveView(tool.view);
+  };
+
+  const recordCommandUsage = async (result: SearchResult) => {
     try {
-      const saved = localStorage.getItem("toolbox_clipboard_history");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+      await invoke("upsert_command_history", {
+        entry: {
+          actionKey: result.id,
+          title: result.title,
+          groupName: result.group,
+          icon: result.icon,
+          meta: result.meta || result.subtitle,
+          payloadJson: JSON.stringify(result.payload),
+          lastUsedAt: Date.now(),
+          useCount: 1,
+        },
+      });
+      setCommandHistory((current) => [
+        {
+          actionKey: result.id,
+          title: result.title,
+          groupName: result.group,
+          icon: result.icon,
+          meta: result.meta || result.subtitle,
+          payloadJson: JSON.stringify(result.payload),
+          lastUsedAt: Date.now(),
+          useCount: (current.find((item) => item.actionKey === result.id)?.useCount || 0) + 1,
+        },
+        ...current.filter((item) => item.actionKey !== result.id),
+      ].slice(0, 20));
+    } catch (error) {
+      console.error(error);
     }
-  });
-  const [isMonitoring, setIsMonitoring] = useState(true);
-  const [previewItem, setPreviewItem] = useState<ClipboardItem | null>(null);
-  const [previewZoom, setPreviewZoom] = useState(1);
-  const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
-  const isDraggingPreview = useRef(false);
-  const dragStartPreview = useRef({ x: 0, y: 0 });
-  const lastClipboardContent = useRef<string>("");
+  };
 
-  useEffect(() => {
-    localStorage.setItem("toolbox_clipboard_history", JSON.stringify(clipboardHistory));
-  }, [clipboardHistory]);
+  const handleActionCommand = async (actionKey: string) => {
+    if (actionKey === "toggle-desktop") {
+      await handleSwitchClick("desktop");
+      return;
+    }
+    if (actionKey === "toggle-taskbar") {
+      await handleSwitchClick("taskbar");
+      return;
+    }
+    if (actionKey === "clear-clipboard") {
+      await invoke("clear_clipboard_records");
+      notifyToolboxDataChanged("clipboard");
+      await invoke("insert_notification", {
+        notification: {
+          id: `clipboard-clear-${Date.now()}`,
+          level: "success",
+          title: "已清空剪贴板历史",
+          message: "保留了收藏和置顶项",
+          source: "clipboard",
+          createdAt: Date.now(),
+          read: false,
+        },
+      });
+    }
+  };
 
-  useEffect(() => {
-    if (!isMonitoring) return;
+  const handleCommandResultClick = async (result: CommandPaletteResult) => {
+    const resolved = commandResults.find((item) => item.id === result.id);
+    if (!resolved) return;
 
-    const checkClipboard = async () => {
-      try {
-        const { readText, readImage } = await import("@tauri-apps/plugin-clipboard-manager");
-        
-        let newText = "";
-        try {
-          newText = await readText() || "";
-        } catch {}
+    setCommandQuery("");
+    setIsCommandPaletteOpen(false);
+    searchInputRef.current?.blur();
 
-        if (newText && newText !== lastClipboardContent.current) {
-          lastClipboardContent.current = newText;
-          const newItem: ClipboardItem = {
-            id: Date.now().toString(),
-            type: 'text',
-            content: newText.slice(0, 10000),
-            timestamp: Date.now(),
-          };
-          setClipboardHistory(prev => {
-            const filtered = prev.filter(item => !(item.type === 'text' && item.content === newText));
-            return [newItem, ...filtered].slice(0, 50);
+    try {
+      await recordCommandUsage(resolved);
+      switch (resolved.payload.type) {
+        case "tool":
+          await handleToolClick(resolved.payload.toolId);
+          break;
+        case "quicklaunch":
+          await invoke("launch_program", {
+            request: {
+              target: resolved.payload.target,
+              itemType: resolved.payload.itemType,
+              args: resolved.payload.args,
+            },
           });
-        }
-
-        try {
-          const imageData = await readImage();
-          if (imageData) {
-            const rgba = await imageData.rgba();
-            const size = await imageData.size();
-            const bytes = new Uint8Array(rgba);
-            const width = size.width;
-            const height = size.height;
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              const imgData = ctx.createImageData(width, height);
-              imgData.data.set(bytes);
-              ctx.putImageData(imgData, 0, 0);
-              const imageContent = canvas.toDataURL('image/png');
-              
-              if (imageContent !== lastClipboardContent.current) {
-                lastClipboardContent.current = imageContent;
-                const newItem: ClipboardItem = {
-                  id: Date.now().toString(),
-                  type: 'image',
-                  content: imageContent,
-                  timestamp: Date.now(),
-                };
-                setClipboardHistory(prev => [newItem, ...prev].slice(0, 50));
-              }
-            }
-          }
-        } catch {}
-      } catch {}
-    };
-
-    const interval = window.setInterval(checkClipboard, 800);
-    return () => clearInterval(interval);
-  }, [isMonitoring]);
-
-  const copyToClipboard = async (item: ClipboardItem) => {
-    try {
-      const { writeText, writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
-      if (item.type === 'text') {
-        await writeText(item.content);
-        lastClipboardContent.current = item.content;
-      } else if (item.type === 'image') {
-        const base64Data = item.content.split(',')[1];
-        const binaryString = atob(base64Data);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        await writeImage(bytes);
-        lastClipboardContent.current = item.content;
+          break;
+        case "clipboard-text":
+          await writeClipboardText(resolved.payload.content);
+          lastClipboardContentRef.current = resolved.payload.content;
+          break;
+        case "clipboard-image":
+          await writeClipboardImage(resolved.payload.content);
+          lastClipboardContentRef.current = resolved.payload.content;
+          break;
+        case "view":
+          setActiveView(resolved.payload.view);
+          break;
+        case "action":
+          await handleActionCommand(resolved.payload.actionKey);
+          break;
+        default:
+          break;
       }
-    } catch {}
-  };
-
-  const deleteClipboardItem = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setClipboardHistory(prev => prev.filter(item => item.id !== id));
-  };
-
-  const clearClipboardHistory = () => {
-    setClipboardHistory([]);
-  };
-
-  const closePreview = () => {
-    setPreviewItem(null);
-    setPreviewZoom(1);
-    setPreviewPan({ x: 0, y: 0 });
-  };
-
-  const handlePreviewWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    setPreviewZoom(z => Math.max(0.25, Math.min(4, z + delta)));
-  };
-
-  const handlePreviewMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 0) {
-      isDraggingPreview.current = true;
-      dragStartPreview.current = { x: e.clientX - previewPan.x, y: e.clientY - previewPan.y };
-    }
-  };
-
-  const handlePreviewMouseMove = (e: React.MouseEvent) => {
-    if (isDraggingPreview.current && previewZoom > 1) {
-      setPreviewPan({
-        x: e.clientX - dragStartPreview.current.x,
-        y: e.clientY - dragStartPreview.current.y,
-      });
-    }
-  };
-
-  const handlePreviewMouseUp = () => {
-    isDraggingPreview.current = false;
-  };
-
-  const formatClipboardTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    
-    if (diffMins < 1) return "刚刚";
-    if (diffMins < 60) return `${diffMins}分钟前`;
-    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}小时前`;
-    return date.toLocaleDateString("zh-CN", { month: "short", day: "numeric" });
-  };
-
-  const renderClipboardView = () => (
-    <div className="sub-view">
-      <div className="sub-view-header">
-        <div className="back-btn" onClick={() => setActiveView("main")}>
-          <span className="back-icon">←</span> 返回
-        </div>
-        <h2 className="sub-view-title">剪切板增强</h2>
-        <div className="clipboard-header-actions">
-          <button 
-            className={`clipboard-monitor-btn ${isMonitoring ? 'active' : ''}`}
-            onClick={() => setIsMonitoring(!isMonitoring)}
-            title={isMonitoring ? "点击暂停监控" : "点击开始监控"}
-          >
-            {isMonitoring ? "⏸️ 监控中" : "▶️ 已暂停"}
-          </button>
-          {clipboardHistory.length > 0 && (
-            <button className="clipboard-clear-btn" onClick={clearClipboardHistory} title="清空历史">
-              🗑️ 清空
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="sub-view-content clipboard-container">
-        {clipboardHistory.length === 0 ? (
-          <div className="clipboard-empty">
-            <div className="clipboard-empty-icon">📋</div>
-            <div className="clipboard-empty-text">暂无复制记录</div>
-            <div className="clipboard-empty-hint">复制文本或图片后将自动记录</div>
-          </div>
-        ) : (
-          <div className="clipboard-list">
-            {clipboardHistory.map(item => (
-              <div 
-                key={item.id} 
-                className="clipboard-item"
-                onClick={() => copyToClipboard(item)}
-              >
-                <div className="clipboard-item-content">
-                  {item.type === 'text' ? (
-                    <div className="clipboard-text-preview">
-                      {item.content.slice(0, 200)}
-                      {item.content.length > 200 && "..."}
-                    </div>
-                  ) : (
-                    <div 
-                      className="clipboard-image-preview" 
-                      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setPreviewItem(item); }}
-                    >
-                      <img src={item.content} alt="复制图片" />
-                    </div>
-                  )}
-                </div>
-                <div className="clipboard-item-footer">
-                  <span className="clipboard-item-time">{formatClipboardTime(item.timestamp)}</span>
-                  <span className="clipboard-item-type">{item.type === 'text' ? "文本" : "图片"}</span>
-                  <button 
-                    className="clipboard-delete-btn" 
-                    onClick={(e) => deleteClipboardItem(item.id, e)}
-                    title="删除"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {previewItem && previewItem.type === 'image' && (
-        <div className="clipboard-preview-overlay" onClick={closePreview}>
-          <div className="clipboard-preview-panel" onClick={e => e.stopPropagation()}>
-            <div className="clipboard-preview-header">
-              <div className="clipboard-preview-zoom-controls">
-                <button className="clipboard-zoom-btn" onClick={() => setPreviewZoom(z => Math.max(0.25, z - 0.25))}>−</button>
-                <span className="clipboard-zoom-level">{Math.round(previewZoom * 100)}%</span>
-                <button className="clipboard-zoom-btn" onClick={() => setPreviewZoom(z => Math.min(4, z + 0.25))}>+</button>
-                <button className="clipboard-zoom-reset" onClick={() => setPreviewZoom(1)}>重置</button>
-              </div>
-              <button className="clipboard-preview-close" onClick={closePreview}>×</button>
-            </div>
-            <div 
-              className="clipboard-preview-content"
-              onWheel={handlePreviewWheel}
-              onMouseDown={handlePreviewMouseDown}
-              onMouseMove={handlePreviewMouseMove}
-              onMouseUp={handlePreviewMouseUp}
-              onMouseLeave={handlePreviewMouseUp}
-            >
-              <img 
-                src={previewItem.content} 
-                alt="预览图片" 
-                style={{ 
-                  transform: `translate(${previewPan.x}px, ${previewPan.y}px) scale(${previewZoom})`,
-                  transition: isDraggingPreview.current ? 'none' : 'transform 0.2s ease',
-                  cursor: previewZoom > 1 ? (isDraggingPreview.current ? 'grabbing' : 'grab') : 'default'
-                }}
-              />
-            </div>
-            <div className="clipboard-preview-footer">
-              <button className="clipboard-preview-copy" onClick={() => copyToClipboard(previewItem)}>
-                复制图片
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  // ============================================
-  // 番茄钟逻辑
-  // ============================================
-  const [focusDuration, setFocusDuration] = useState(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_pomodoro_focus");
-      return saved ? parseInt(saved) : 25;
-    } catch {
-      return 25;
-    }
-  });
-  const [breakDuration, setBreakDuration] = useState(() => {
-    try {
-      const saved = localStorage.getItem("toolbox_pomodoro_break");
-      return saved ? parseInt(saved) : 5;
-    } catch {
-      return 5;
-    }
-  });
-  const [timeLeft, setTimeLeft] = useState(focusDuration * 60);
-  const [isTimerActive, setIsTimerActive] = useState(false);
-  const [isBreak, setIsBreak] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [tempFocusDuration, setTempFocusDuration] = useState(focusDuration.toString());
-  const [tempBreakDuration, setTempBreakDuration] = useState(breakDuration.toString());
-  
-  useEffect(() => {
-    localStorage.setItem("toolbox_pomodoro_focus", focusDuration.toString());
-  }, [focusDuration]);
-
-  useEffect(() => {
-    localStorage.setItem("toolbox_pomodoro_break", breakDuration.toString());
-  }, [breakDuration]);
-  
-  useEffect(() => {
-    let interval: number | null = null;
-    if (isTimerActive && timeLeft > 0) {
-      interval = window.setInterval(() => {
-        setTimeLeft(prev => prev - 1);
-      }, 1000);
-    } else if (isTimerActive && timeLeft === 0) {
-      setIsTimerActive(false);
-      
-      // 使用 Tauri 插件发送系统通知
-      import('@tauri-apps/plugin-notification').then(({ isPermissionGranted, requestPermission, sendNotification }) => {
-        isPermissionGranted().then(granted => {
-          if (!granted) {
-            return requestPermission();
-          }
-          return granted ? 'granted' : 'default';
-        }).then(permission => {
-          if (permission === 'granted') {
-            sendNotification({
-              title: isBreak ? "休息结束！" : "专注完成！",
-              body: isBreak ? "休息已结束，准备开始新的专注！" : "完成了一个番茄钟，休息一下吧！",
-            });
-          }
-        });
+    } catch (error) {
+      console.error(error);
+      await invoke("insert_notification", {
+        notification: {
+          id: `command-error-${Date.now()}`,
+          level: "error",
+          title: "命令执行失败",
+          message: String(error),
+          source: "command",
+          createdAt: Date.now(),
+          read: false,
+        },
       }).catch(console.error);
     }
-    return () => {
-      if (interval) clearInterval(interval);
-    }
-  }, [isTimerActive, timeLeft, isBreak]);
+  };
 
-  const toggleTimer = () => {
-    // 请求通知权限
-    if (!isTimerActive) {
-      import('@tauri-apps/plugin-notification').then(({ isPermissionGranted, requestPermission }) => {
-        isPermissionGranted().then(granted => {
-          if (!granted) {
-            requestPermission();
-          }
-        });
+  const handleCommandResultSecondaryClick = async (result: CommandPaletteResult) => {
+    const resolved = commandResults.find((item) => item.id === result.id);
+    if (!resolved || resolved.secondaryAction.type === "none") return;
+
+    setIsCommandPaletteOpen(false);
+    setCommandQuery("");
+    searchInputRef.current?.blur();
+    setActiveView(resolved.secondaryAction.view);
+  };
+
+  const handleCommandQueryChange = (value: string) => {
+    setCommandQuery(value);
+    setIsCommandPaletteOpen(true);
+  };
+
+  const openCommandPalette = () => {
+    setIsCommandPaletteOpen(true);
+    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+  };
+
+  const handleCommandInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (!commandResults.length && event.key !== "Escape") return;
+
+    const currentIndex = commandResults.findIndex((result) => result.id === selectedCommandId);
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % commandResults.length;
+      setSelectedCommandId(commandResults[nextIndex]?.id ?? null);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      const nextIndex =
+        currentIndex <= 0 ? commandResults.length - 1 : currentIndex - 1;
+      setSelectedCommandId(commandResults[nextIndex]?.id ?? null);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (event.ctrlKey) {
+        const selected =
+          commandResults.find((result) => result.id === selectedCommandId) ?? commandResults[0];
+        if (selected) {
+          void handleCommandResultSecondaryClick(selected);
+        }
+        return;
+      }
+
+      const selected =
+        commandResults.find((result) => result.id === selectedCommandId) ?? commandResults[0];
+      if (selected) {
+        void handleCommandResultClick(selected);
+      }
+      return;
+    }
+
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const selected =
+        commandResults.find((result) => result.id === selectedCommandId) ?? commandResults[0];
+      if (selected) {
+        void handleCommandResultSecondaryClick(selected);
+      }
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setCommandQuery("");
+      setIsCommandPaletteOpen(false);
+      searchInputRef.current?.blur();
+    }
+  };
+
+  const handleSwitchClick = async (switchId: ToggleSwitchItem["id"]) => {
+    if (pendingSwitches[switchId]) return;
+
+    const previousValue = switchStates[switchId];
+    const willBeActive = !switchStates[switchId];
+    setSwitchStates((current) => ({ ...current, [switchId]: willBeActive }));
+    setPendingSwitches((current) => ({ ...current, [switchId]: true }));
+
+    try {
+      if (switchId === "desktop") {
+        await invoke("toggle_desktop", { show: willBeActive });
+      } else if (switchId === "taskbar") {
+        await invoke("toggle_taskbar", { show: willBeActive });
+      }
+    } catch (error) {
+      console.error(error);
+      setSwitchStates((current) => ({ ...current, [switchId]: previousValue }));
+      await invoke("insert_notification", {
+        notification: {
+          id: `switch-error-${switchId}-${Date.now()}`,
+          level: "error",
+          title: "系统切换失败",
+          message: String(error),
+          source: "system",
+          createdAt: Date.now(),
+          read: false,
+        },
       }).catch(console.error);
+    } finally {
+      setPendingSwitches((current) => ({ ...current, [switchId]: false }));
     }
-    setIsTimerActive(!isTimerActive);
-  };
-  
-  const resetTimer = () => {
-    setIsTimerActive(false);
-    setTimeLeft(isBreak ? breakDuration * 60 : focusDuration * 60);
-  };
-  
-  const setMode = (breakMode: boolean) => {
-    setIsBreak(breakMode);
-    setIsTimerActive(false);
-    setTimeLeft(breakMode ? breakDuration * 60 : focusDuration * 60);
   };
 
-  const savePomodoroSettings = () => {
-    const focus = parseInt(tempFocusDuration);
-    const breakVal = parseInt(tempBreakDuration);
-    if (focus >= 1 && focus <= 120) {
-      setFocusDuration(focus);
-      if (!isBreak) setTimeLeft(focus * 60);
-    }
-    if (breakVal >= 1 && breakVal <= 60) {
-      setBreakDuration(breakVal);
-      if (isBreak) setTimeLeft(breakVal * 60);
-    }
-    setShowSettings(false);
+  const handleNotificationRead = async (id: string, read: boolean) => {
+    setNotifications((current) => current.map((item) => (item.id === id ? { ...item, read } : item)));
+    await invoke("mark_notification_read", { id, read }).catch(console.error);
   };
 
-  const formatTimer = (seconds: number) => {
-    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const s = (seconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
+  const handleNotificationClear = async () => {
+    setNotifications([]);
+    await invoke("clear_notification_history").catch(console.error);
   };
 
-  const renderPomodoroView = () => (
-    <div className="sub-view">
-      <div className="sub-view-header">
-        <div className="back-btn" onClick={() => setActiveView("main")}>
-          <span className="back-icon">←</span> 返回
-        </div>
-        <h2 className="sub-view-title">番茄钟</h2>
-        <button className="pomodoro-settings-btn" onClick={() => setShowSettings(true)} title="设置">
-          ⚙️
-        </button>
-      </div>
-      <div className="sub-view-content pomodoro-container">
-        <div className="pomodoro-modes">
-          <button 
-            className={`pomodoro-mode-btn ${!isBreak ? 'active' : ''}`}
-            onClick={() => setMode(false)}
-          >
-            专注模式 ({focusDuration}分钟)
-          </button>
-          <button 
-            className={`pomodoro-mode-btn ${isBreak ? 'active' : ''}`}
-            onClick={() => setMode(true)}
-          >
-            休息模式 ({breakDuration}分钟)
-          </button>
-        </div>
-        
-        <div className="pomodoro-timer-circle">
-          <div className="pomodoro-time-display">
-            {formatTimer(timeLeft)}
-          </div>
-        </div>
-        
-        <div className="pomodoro-controls">
-          <button className="pomodoro-control-btn main-btn" onClick={toggleTimer}>
-            {isTimerActive ? "暂停计时" : "开始计时"}
-          </button>
-          <button className="pomodoro-control-btn reset-btn" onClick={resetTimer}>
-            重置
-          </button>
-        </div>
-      </div>
+  const switches: ToggleSwitchItem[] = [
+    {
+      id: "desktop",
+      icon: "👁️",
+      iconSrc: desktopIcon,
+      label: "桌面图标",
+      desc: "切换桌面图标显示状态",
+      active: switchStates.desktop,
+      pending: pendingSwitches.desktop,
+    },
+    {
+      id: "taskbar",
+      icon: "🚀",
+      iconSrc: taskbarIcon,
+      label: "任务栏",
+      desc: "切换任务栏显示状态",
+      active: switchStates.taskbar,
+      pending: pendingSwitches.taskbar,
+    },
+  ];
 
-      {showSettings && (
-        <div className="pomodoro-settings-overlay" onClick={() => setShowSettings(false)}>
-          <div className="pomodoro-settings-panel" onClick={e => e.stopPropagation()}>
-            <h3 className="settings-title">番茄钟设置</h3>
-            <div className="settings-row">
-              <label className="settings-label">专注时间（分钟）</label>
-              <input
-                type="number"
-                className="settings-input"
-                value={tempFocusDuration}
-                onChange={e => setTempFocusDuration(e.target.value)}
-                min="1"
-                max="120"
-              />
-            </div>
-            <div className="settings-row">
-              <label className="settings-label">休息时间（分钟）</label>
-              <input
-                type="number"
-                className="settings-input"
-                value={tempBreakDuration}
-                onChange={e => setTempBreakDuration(e.target.value)}
-                min="1"
-                max="60"
-              />
-            </div>
-            <div className="settings-actions">
-              <button className="settings-cancel-btn" onClick={() => setShowSettings(false)}>
-                取消
-              </button>
-              <button className="settings-save-btn" onClick={savePomodoroSettings}>
-                保存
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  const renderers: Record<ViewToolId, ReactNode> = {
+    json: <JsonToolView onBack={() => setActiveView("main")} />,
+    codec: <CodecToolView onBack={() => setActiveView("main")} />,
+    qrcode: <QrCodeView onBack={() => setActiveView("main")} />,
+    systeminfo: <SystemInfoView onBack={() => setActiveView("main")} />,
+    network: <NetworkToolView onBack={() => setActiveView("main")} />,
+    todo: <TodoView onBack={() => setActiveView("main")} />,
+    clipboard: (
+      <ClipboardView
+        onBack={() => setActiveView("main")}
+        isMonitoring={isClipboardMonitoring}
+        defaultDateFilter={clipboardDefaultDateFilter}
+        onMonitoringChange={updateClipboardMonitoring}
+        onClipboardContentWritten={(content) => {
+          lastClipboardContentRef.current = content;
+        }}
+      />
+    ),
+    textmanager: <TextManagerView onBack={() => setActiveView("main")} />,
+    quicklaunch: (
+      <QuickLaunchView
+        onBack={() => setActiveView("main")}
+        isDialogOpenRef={isDialogOpenRef}
+      />
+    ),
+    pomodoro: <PomodoroView onBack={() => setActiveView("main")} />,
+    settings: (
+      <SettingsView
+        onBack={() => setActiveView("main")}
+        sidebarWidth={sidebarWidth}
+        clipboardMonitoring={isClipboardMonitoring}
+        clipboardDefaultDateFilter={clipboardDefaultDateFilter}
+        tools={orderedTools}
+        onSidebarWidthChange={updateSidebarWidth}
+        onClipboardMonitoringChange={updateClipboardMonitoring}
+        onClipboardDefaultDateFilterChange={setClipboardDefaultDateFilter}
+        onToolOrderChange={updateToolOrder}
+        onToolOrderReset={resetToolOrder}
+      />
+    ),
+  };
 
   return (
-    <div className={`sidebar-container ${isOpening ? 'slide-in' : ''} ${isClosing ? 'slide-out' : ''}`} ref={sidebarRef}>
-      {/* 拖拽预览线 */}
+    <div
+      className={`sidebar-container ${isOpening ? "slide-in" : ""} ${isClosing ? "slide-out" : ""}`}
+      ref={sidebarRef}
+    >
       {previewWidth !== null && (
         <div
           className="drag-preview-line"
           style={{ left: `${Math.max(0, sidebarWidth - previewWidth)}px` }}
         >
-          <div className="drag-preview-label">
-            {Math.round(previewWidth)}px
-          </div>
+          <div className="drag-preview-label">{Math.round(previewWidth)}px</div>
         </div>
       )}
 
-      {/* 左边缘拖拽手柄 */}
       <div
-        className={`drag-handle ${previewWidth !== null ? 'dragging' : ''}`}
+        className={`drag-handle ${previewWidth !== null ? "dragging" : ""}`}
         onMouseDown={handleMouseDown}
       >
         <div className="drag-handle-indicator" />
       </div>
 
-      {/* 侧边栏主体内容 */}
       <div className="sidebar-content">
         {activeView === "main" ? (
+          <MainSidebarView
+            currentTime={currentTime}
+            tools={orderedTools}
+            switches={switches}
+            commandQuery={commandQuery}
+            isCommandPaletteOpen={isCommandPaletteOpen}
+            selectedCommandId={selectedCommandId}
+            commandResults={commandResults}
+            commandFilter={commandFilter}
+            commandFilters={commandFilters}
+            notifications={notifications}
+            unreadNotificationCount={unreadNotificationCount}
+            isNotificationCenterOpen={isNotificationCenterOpen}
+            searchInputRef={searchInputRef}
+            onCommandPaletteOpen={openCommandPalette}
+            onCommandInputKeyDown={handleCommandInputKeyDown}
+            onCommandQueryChange={handleCommandQueryChange}
+            onCommandFilterChange={setCommandFilter}
+            onCommandResultHover={setSelectedCommandId}
+            onCommandResultClick={handleCommandResultClick}
+            onCommandResultSecondaryClick={handleCommandResultSecondaryClick}
+            onNotificationToggle={() => setIsNotificationCenterOpen((current) => !current)}
+            onNotificationRead={handleNotificationRead}
+            onNotificationClear={handleNotificationClear}
+            onToolClick={handleToolClick}
+            onToolOrderManage={() => setActiveView("settings")}
+            onSwitchClick={handleSwitchClick}
+          />
+        ) : (
+          renderers[activeView]
+        )}
+      </div>
+      <div className="app-toast-stack">
+        {toastNotifications.map((notification) => (
+          <div key={notification.id} className={`app-toast ${notification.level}`}>
+            <div className="app-toast-title">{notification.title}</div>
+            <div className="app-toast-message">{notification.message}</div>
+          </div>
+        ))}
           <div className="main-view">
             {/* 上侧：功能区 (约 80%) */}
             <div className="functional-area">
