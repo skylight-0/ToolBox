@@ -207,15 +207,19 @@ function PasswordView({ onBack, isDialogOpenRef, requirePasswordAuth }: Password
     });
   };
 
-  const copyPassword = async (password: string) => {
+  const copyText = async (text: string) => {
     try {
       const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-      await writeText(password);
+      await writeText(text);
       setSaveError("");
     } catch (error) {
       setSaveError(String(error));
     }
   };
+
+  const copyAccount = (username: string) => copyText(username);
+
+  const copyPassword = (password: string) => copyText(password);
 
   if (!isUnlocked) {
     return (
@@ -370,8 +374,20 @@ function PasswordView({ onBack, isDialogOpenRef, requirePasswordAuth }: Password
                   return (
                     <div className="password-account-item" key={account.id}>
                       <div className="password-account-top">
-                        <div className="password-account-user">{account.username}</div>
+                        <button
+                          className="password-account-user"
+                          onClick={() => void copyAccount(account.username)}
+                          title="复制账号"
+                        >
+                          {account.username}
+                        </button>
                         <div className="password-account-actions">
+                          <button
+                            className="password-small-btn"
+                            onClick={() => void copyAccount(account.username)}
+                          >
+                            复制账号
+                          </button>
                           <button
                             className="password-small-btn"
                             onClick={() =>

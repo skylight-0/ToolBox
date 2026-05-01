@@ -2622,12 +2622,23 @@ body,
 
 .password-account-user {
   min-width: 0;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.password-account-user:hover,
+.password-account-user:focus-visible {
+  color: #2563eb;
 }
 
 .password-account-actions {
