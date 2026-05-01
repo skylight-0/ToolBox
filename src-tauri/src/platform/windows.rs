@@ -87,30 +87,6 @@ pub fn toggle_taskbar(window: WebviewWindow, show: bool) -> Result<(), String> {
     }
 }
 
-fn run_hidden_powershell(script: &str) -> Result<String, String> {
-    let mut cmd = Command::new("powershell");
-    cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
-
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    let output = cmd
-        .output()
-        .map_err(|e| format!("执行 PowerShell 失败: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if stderr.is_empty() {
-            "硬件信息采集失败".to_string()
-        } else {
-            stderr
-        });
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
 fn to_wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value.as_ref().encode_wide().chain(once(0)).collect()
 }
