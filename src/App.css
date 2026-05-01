@@ -2463,6 +2463,7 @@ body,
 }
 
 .password-domain-text {
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -2482,6 +2483,28 @@ body,
   color: var(--text-tertiary);
 }
 
+.password-domain-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.password-domain-copy {
+  min-width: 36px;
+  height: 24px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
 .password-domain-delete,
 .password-delete-account {
   width: 24px;
@@ -2498,9 +2521,15 @@ body,
   transition: all 0.2s;
 }
 
+.password-domain-item:hover .password-domain-copy,
 .password-domain-item:hover .password-domain-delete,
 .password-account-item:hover .password-delete-account {
   opacity: 1;
+}
+
+.password-domain-copy:hover {
+  background: rgba(96, 205, 255, 0.16);
+  color: var(--text-primary);
 }
 
 .password-domain-delete:hover,
@@ -5501,6 +5530,8 @@ body,
   }
 
   .password-domain-list-only .password-sidebar {
+    flex: 1;
+    min-height: 0;
     max-height: none;
     border-bottom: none;
   }
@@ -5521,8 +5552,9 @@ body,
   }
 
   .password-domain-list {
-    max-height: 220px;
-    flex: 0 1 auto;
+    max-height: none;
+    min-height: 0;
+    flex: 1 1 auto;
     flex-direction: column;
     overflow-x: hidden;
     overflow-y: auto;
@@ -5556,6 +5588,7 @@ body,
     color: var(--text-primary);
   }
 
+  .password-domain-copy,
   .password-domain-delete,
   .password-delete-account {
     opacity: 1;

@@ -221,6 +221,11 @@ function PasswordView({ onBack, isDialogOpenRef, requirePasswordAuth }: Password
 
   const copyPassword = (password: string) => copyText(password);
 
+  const copyDomain = (domainName: string, event: MouseEvent) => {
+    event.stopPropagation();
+    void copyText(domainName);
+  };
+
   if (!isUnlocked) {
     return (
       <div className="sub-view password-auth-view">
@@ -293,13 +298,22 @@ function PasswordView({ onBack, isDialogOpenRef, requirePasswordAuth }: Password
                 <span className="password-domain-name">{domain.domain}</span>
                 <span className="password-domain-count">{domain.accounts.length} 个账号</span>
               </div>
-              <button
-                className="password-domain-delete"
-                onClick={(event) => deleteDomain(domain.id, event)}
-                title="删除域名"
-              >
-                ×
-              </button>
+              <div className="password-domain-actions">
+                <button
+                  className="password-domain-copy"
+                  onClick={(event) => copyDomain(domain.domain, event)}
+                  title="复制域名"
+                >
+                  复制
+                </button>
+                <button
+                  className="password-domain-delete"
+                  onClick={(event) => deleteDomain(domain.id, event)}
+                  title="删除域名"
+                >
+                  ×
+                </button>
+              </div>
             </div>
           ))}
         </div>
