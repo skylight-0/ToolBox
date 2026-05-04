@@ -21,6 +21,7 @@ import JsonToolView from "./features/json/JsonToolView";
 import NetworkToolView from "./features/network/NetworkToolView";
 import PasswordView from "./features/password/PasswordView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
+import PortableDesktopView from "./features/portabledesktop/PortableDesktopView";
 import QrCodeView from "./features/qrcode/QrCodeView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
 import SettingsView from "./features/settings/SettingsView";
@@ -653,6 +654,18 @@ function App() {
         group: "动作",
         category: "actions",
         payload: { type: "view", view: "quicklaunch" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-portabledesktop",
+        icon: "🖥️",
+        title: "打开便携桌面",
+        subtitle: "进入便携桌面模块",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "portabledesktop" },
         secondaryAction: { type: "none" },
         score: 40,
       },
@@ -1302,6 +1315,12 @@ function App() {
     textmanager: <TextManagerView onBack={() => setActiveView("main")} />,
     quicklaunch: (
       <QuickLaunchView
+        onBack={() => setActiveView("main")}
+        isDialogOpenRef={isDialogOpenRef}
+      />
+    ),
+    portabledesktop: (
+      <PortableDesktopView
         onBack={() => setActiveView("main")}
         isDialogOpenRef={isDialogOpenRef}
       />

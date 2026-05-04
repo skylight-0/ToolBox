@@ -9,6 +9,7 @@ export type ActiveView =
   | "password"
   | "clipboard"
   | "quicklaunch"
+  | "portabledesktop"
   | "textmanager"
   | "pomodoro"
   | "settings";

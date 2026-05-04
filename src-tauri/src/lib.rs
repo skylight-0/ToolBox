@@ -1,6 +1,6 @@
 use std::fs;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -106,6 +106,45 @@ struct QuickLaunchItemRecord {
 struct QuickLaunchData {
     groups: Vec<QuickLaunchGroupRecord>,
     items: Vec<QuickLaunchItemRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PortableDesktopItemRecord {
+    id: String,
+    name: String,
+    #[serde(rename = "itemType")]
+    item_type: String,
+    path: String,
+    icon: Option<String>,
+    args: Option<String>,
+    #[serde(rename = "pageIndex")]
+    page_index: Option<i64>,
+    #[serde(rename = "sortOrder")]
+    sort_order: Option<i64>,
+    #[serde(rename = "groupId")]
+    group_id: Option<String>,
+    #[serde(rename = "launchCount")]
+    launch_count: Option<i64>,
+    #[serde(rename = "lastOpenedAt")]
+    last_opened_at: Option<i64>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<i64>,
+    #[serde(rename = "updatedAt")]
+    updated_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PortableDesktopData {
+    #[serde(rename = "rootPath")]
+    root_path: String,
+    items: Vec<PortableDesktopItemRecord>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PortableDesktopPathResult {
+    name: String,
+    path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -469,6 +508,22 @@ fn init_app_db(path: &PathBuf) -> Result<(), String> {
                 last_launched_at INTEGER NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS portable_desktop_items (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                path TEXT NOT NULL DEFAULT '',
+                icon TEXT,
+                args TEXT NOT NULL DEFAULT '',
+                page_index INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                group_id TEXT,
+                launch_count INTEGER NOT NULL DEFAULT 0,
+                last_opened_at INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS app_settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -658,6 +713,46 @@ fn replace_quicklaunch_data(connection: &Connection, data: &QuickLaunchData) -> 
     Ok(())
 }
 
+fn replace_portable_desktop_data(
+    connection: &Connection,
+    data: &PortableDesktopData,
+) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM portable_desktop_items", [])
+        .map_err(|error| format!("清空便携桌面数据失败: {}", error))?;
+
+    let mut statement = connection
+        .prepare(
+            "INSERT INTO portable_desktop_items
+             (id, name, item_type, path, icon, args, page_index, sort_order, group_id,
+              launch_count, last_opened_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        )
+        .map_err(|error| format!("准备保存便携桌面数据失败: {}", error))?;
+
+    for item in &data.items {
+        statement
+            .execute(params![
+                item.id,
+                item.name,
+                item.item_type,
+                item.path,
+                item.icon,
+                item.args.clone().unwrap_or_default(),
+                item.page_index.unwrap_or(0),
+                item.sort_order.unwrap_or(0),
+                item.group_id,
+                item.launch_count.unwrap_or(0),
+                item.last_opened_at.unwrap_or(0),
+                item.created_at.unwrap_or(0),
+                item.updated_at.unwrap_or(0),
+            ])
+            .map_err(|error| format!("保存便携桌面数据失败: {}", error))?;
+    }
+
+    Ok(())
+}
+
 fn upsert_command_history_record(
     connection: &Connection,
     entry: &CommandHistoryRecord,
@@ -734,6 +829,54 @@ fn password_vault_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("无法获取应用数据目录: {}", e))?;
     fs::create_dir_all(&dir).map_err(|e| format!("无法创建应用数据目录: {}", e))?;
     Ok(dir.join("password_vault.dat"))
+}
+
+fn portable_desktop_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("无法获取应用数据目录: {}", e))?
+        .join("portable-desktop");
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建便携桌面目录: {}", e))?;
+    Ok(dir)
+}
+
+fn sanitize_portable_desktop_name(raw_name: &str) -> Result<String, String> {
+    let name = raw_name.trim();
+    if name.is_empty() {
+        return Err("名称不能为空".to_string());
+    }
+    if name == "." || name == ".." {
+        return Err("名称无效".to_string());
+    }
+    let invalid_chars = ['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
+    if name.chars().any(|char| invalid_chars.contains(&char)) {
+        return Err("名称不能包含 \\ / : * ? \" < > |".to_string());
+    }
+    if name.ends_with('.') {
+        return Err("名称不能以点结尾".to_string());
+    }
+    Ok(name.to_string())
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+fn ensure_portable_desktop_path(root: &Path, raw_path: &str) -> Result<PathBuf, String> {
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("解析便携桌面目录失败: {}", error))?;
+    let target = PathBuf::from(raw_path);
+    let target = target
+        .canonicalize()
+        .map_err(|error| format!("解析目标路径失败: {}", error))?;
+
+    if !target.starts_with(&root) {
+        return Err("只能操作便携桌面目录内的文件".to_string());
+    }
+
+    Ok(target)
 }
 
 #[cfg(target_os = "windows")]
@@ -1399,6 +1542,147 @@ fn save_quicklaunch_data(
 }
 
 #[tauri::command]
+fn get_portable_desktop_data(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<PortableDesktopData, String> {
+    let root = portable_desktop_root(&app)?;
+    let connection = open_clipboard_db(&state)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, item_type, path, icon, args, page_index, sort_order, group_id,
+                    launch_count, last_opened_at, created_at, updated_at
+             FROM portable_desktop_items",
+        )
+        .map_err(|error| format!("读取便携桌面数据失败: {}", error))?;
+
+    let items = statement
+        .query_map([], |row| {
+            Ok(PortableDesktopItemRecord {
+                id: row.get("id")?,
+                name: row.get("name")?,
+                item_type: row.get("item_type")?,
+                path: row.get("path")?,
+                icon: row.get("icon")?,
+                args: row.get("args")?,
+                page_index: Some(row.get("page_index")?),
+                sort_order: Some(row.get("sort_order")?),
+                group_id: row.get("group_id")?,
+                launch_count: Some(row.get("launch_count")?),
+                last_opened_at: Some(row.get("last_opened_at")?),
+                created_at: Some(row.get("created_at")?),
+                updated_at: Some(row.get("updated_at")?),
+            })
+        })
+        .map_err(|error| format!("查询便携桌面数据失败: {}", error))?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("解析便携桌面数据失败: {}", error))?;
+
+    Ok(PortableDesktopData {
+        root_path: path_to_string(&root),
+        items,
+    })
+}
+
+#[tauri::command]
+fn save_portable_desktop_data(
+    state: State<'_, AppState>,
+    data: PortableDesktopData,
+) -> Result<(), String> {
+    let mut connection = open_clipboard_db(&state)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("开始保存便携桌面事务失败: {}", error))?;
+    replace_portable_desktop_data(&transaction, &data)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("提交便携桌面事务失败: {}", error))
+}
+
+#[tauri::command]
+fn create_portable_desktop_file(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<PortableDesktopPathResult, String> {
+    let root = portable_desktop_root(&app)?;
+    let safe_name = sanitize_portable_desktop_name(&name)?;
+    let file_name = if Path::new(&safe_name).extension().is_none() {
+        format!("{}.txt", safe_name)
+    } else {
+        safe_name
+    };
+    let path = root.join(&file_name);
+    if path.exists() {
+        return Err("同名文件已存在".to_string());
+    }
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| format!("创建文件失败: {}", error))?;
+
+    Ok(PortableDesktopPathResult {
+        name: file_name,
+        path: path_to_string(&path),
+    })
+}
+
+#[tauri::command]
+fn create_portable_desktop_folder(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<PortableDesktopPathResult, String> {
+    let root = portable_desktop_root(&app)?;
+    let folder_name = sanitize_portable_desktop_name(&name)?;
+    let path = root.join(&folder_name);
+    if path.exists() {
+        return Err("同名文件夹已存在".to_string());
+    }
+    fs::create_dir(&path).map_err(|error| format!("创建文件夹失败: {}", error))?;
+
+    Ok(PortableDesktopPathResult {
+        name: folder_name,
+        path: path_to_string(&path),
+    })
+}
+
+#[tauri::command]
+fn rename_portable_desktop_entry(
+    app: tauri::AppHandle,
+    path: String,
+    new_name: String,
+) -> Result<PortableDesktopPathResult, String> {
+    let root = portable_desktop_root(&app)?;
+    let source = ensure_portable_desktop_path(&root, &path)?;
+    let safe_name = sanitize_portable_desktop_name(&new_name)?;
+    let parent = source.parent().unwrap_or(&root);
+    let target = parent.join(&safe_name);
+
+    if target.exists() {
+        return Err("同名项目已存在".to_string());
+    }
+
+    fs::rename(&source, &target).map_err(|error| format!("重命名失败: {}", error))?;
+    Ok(PortableDesktopPathResult {
+        name: safe_name,
+        path: path_to_string(&target),
+    })
+}
+
+#[tauri::command]
+fn delete_portable_desktop_entry(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let root = portable_desktop_root(&app)?;
+    let target = ensure_portable_desktop_path(&root, &path)?;
+    if target.is_dir() {
+        fs::remove_dir_all(&target).map_err(|error| format!("删除文件夹失败: {}", error))?;
+    } else {
+        fs::remove_file(&target).map_err(|error| format!("删除文件失败: {}", error))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn get_setting(state: State<'_, AppState>, key: String) -> Result<Option<String>, String> {
     let connection = open_clipboard_db(&state)?;
     connection
@@ -1895,6 +2179,12 @@ pub fn run() {
             save_text_manager_data,
             get_quicklaunch_data,
             save_quicklaunch_data,
+            get_portable_desktop_data,
+            save_portable_desktop_data,
+            create_portable_desktop_file,
+            create_portable_desktop_folder,
+            rename_portable_desktop_entry,
+            delete_portable_desktop_entry,
             get_command_history,
             upsert_command_history,
             get_notification_history,
