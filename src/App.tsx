@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import "./App.css";
@@ -500,6 +501,16 @@ function App() {
     };
     window.addEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
     return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
+  }, []);
+
+  // Listen for cross-window data changes from the standalone text manager window
+  useEffect(() => {
+    const unlistenPromise = listen<{ kind?: string }>("toolbox-data-changed", (event) => {
+      window.dispatchEvent(
+        new CustomEvent(TOOLBOX_DATA_CHANGED, { detail: event.payload }),
+      );
+    });
+    return () => { unlistenPromise.then((fn) => fn()); };
   }, []);
 
   useEffect(() => {
@@ -1017,6 +1028,28 @@ function App() {
     const tool = TOOLS.find((item) => item.id === toolId);
     if (!tool) return;
 
+    if (toolId === "textmanager") {
+      const label = "textmanager";
+      const existing = await WebviewWindow.getByLabel(label);
+      if (existing) {
+        await existing.setFocus().catch(console.error);
+      } else {
+        const webview = new WebviewWindow(label, {
+          url: "/#textmanager",
+          title: "文本管理",
+          width: 900,
+          height: 680,
+          resizable: true,
+          decorations: true,
+        });
+        webview.once("tauri://created", () => {});
+        webview.once("tauri://error", (e) => {
+          console.error("Failed to create textmanager window", e);
+        });
+      }
+      return;
+    }
+
     setActiveView(tool.view);
   };
 
@@ -1110,7 +1143,11 @@ function App() {
           lastClipboardContentRef.current = resolved.payload.content;
           break;
         case "view":
-          setActiveView(resolved.payload.view);
+          if (resolved.payload.view === "textmanager") {
+            await handleToolClick("textmanager");
+          } else {
+            setActiveView(resolved.payload.view);
+          }
           break;
         case "action":
           await handleActionCommand(resolved.payload.actionKey);
@@ -1141,7 +1178,11 @@ function App() {
     setIsCommandPaletteOpen(false);
     setCommandQuery("");
     searchInputRef.current?.blur();
-    setActiveView(resolved.secondaryAction.view);
+    if (resolved.secondaryAction.view === "textmanager") {
+      await handleToolClick("textmanager");
+    } else {
+      setActiveView(resolved.secondaryAction.view);
+    }
   };
 
   const handleCommandQueryChange = (value: string) => {

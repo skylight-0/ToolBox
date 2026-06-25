@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(npm run *)",
-      "Bash(cargo check *)"
+      "Bash(cargo check *)",
+      "Bash(grep -n \"transparent\\\\|background\\\\|#root\\\\|html, body\\\\|body {\" src/App.css)",
+      "Bash(npx tsc *)"
     ]
   }
 }

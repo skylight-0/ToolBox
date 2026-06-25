@@ -64,6 +64,21 @@ body,
   /* 整体防选中，提升原生感 */
 }
 
+/* Standalone text manager window — solid background to avoid white screen */
+body:has(.textmanager-window-standalone),
+body:has(.textmanager-window-standalone) #root {
+  background: #f0f4fa;
+  overflow: auto;
+}
+.textmanager-window-standalone {
+  height: 100%;
+  background: #f0f4fa;
+  overflow: auto;
+}
+.textmanager-window-standalone .sub-view {
+  background: #f0f4fa;
+}
+
 /* ============================================
    侧边栏容器
    ============================================ */
