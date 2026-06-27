@@ -2,10 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import { notifyToolboxDataChanged } from "../../utils/dataSync";
 
-type TextManagerViewProps = {
-  onBack: () => void;
-};
-
 type TextGroup = {
   id: string;
   name: string;
@@ -43,7 +39,7 @@ function formatUpdatedAt(timestamp: number) {
   });
 }
 
-function TextManagerView({ onBack }: TextManagerViewProps) {
+function TextManagerView() {
   const [groups, setGroups] = useState<TextGroup[]>([DEFAULT_GROUP]);
   const [entries, setEntries] = useState<TextEntry[]>([]);
   const [activeGroupId, setActiveGroupId] = useState("default");
@@ -121,8 +117,8 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
 
   const deleteGroup = (groupId: string) => {
     const nextEntries = entries.map((entry) =>
-        entry.groupId === groupId ? { ...entry, groupId: "default", updatedAt: Date.now() } : entry,
-      );
+      entry.groupId === groupId ? { ...entry, groupId: "default", updatedAt: Date.now() } : entry,
+    );
     const nextGroups = groups.filter((group) => group.id !== groupId);
     persistTextManagerData(nextGroups, nextEntries);
     if (activeGroupId === groupId) {
@@ -134,6 +130,7 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
     const entry = createEntry(activeGroupId);
     persistTextManagerData(groups, [entry, ...entries]);
     setSelectedEntryId(entry.id);
+    setSearchKeyword("");
   };
 
   const updateEntry = (
@@ -160,22 +157,40 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
 
   const activeGroupName =
     groups.find((group) => group.id === activeGroupId)?.name ?? DEFAULT_GROUP.name;
+  const activeEntryCount = filteredEntries.length;
 
   return (
-    <div className="sub-view textmanager-split-view">
-      <div className="sub-view-sidebar">
-        <div className="sub-view-sidebar-header">
-          <div className="back-btn" onClick={onBack}>
-            <span className="back-icon">←</span> 返回
+    <div className="tm-app">
+      <header className="tm-topbar">
+        <div className="tm-brand">
+          <div className="tm-brand-mark">🗂️</div>
+          <div className="tm-brand-text">
+            <h1 className="tm-brand-title">文本管理</h1>
+            <p className="tm-brand-sub">保存常用文本、命令与模板，按分组快速检索</p>
           </div>
-          <h2 className="sub-view-title">文本分组</h2>
         </div>
+        <div className="tm-topbar-tools">
+          <label className="tm-search">
+            <span className="tm-search-icon">🔍</span>
+            <input
+              type="text"
+              placeholder="搜索标题或内容..."
+              value={searchKeyword}
+              onChange={(event) => setSearchKeyword(event.target.value)}
+            />
+          </label>
+          <button className="tm-new-btn" onClick={addEntry}>
+            + 新建文本
+          </button>
+        </div>
+      </header>
 
-        <div className="quicklaunch-nav">
+      <div className="tm-groups">
+        <div className="tm-groups-scroll">
           {groups.map((group) => (
             <div
               key={group.id}
-              className={`quicklaunch-nav-item ${activeGroupId === group.id ? "active" : ""}`}
+              className={`tm-chip ${activeGroupId === group.id ? "active" : ""}`}
               onClick={() => setActiveGroupId(group.id)}
               onDoubleClick={() => {
                 if (group.id !== "default") {
@@ -183,24 +198,27 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
                   setEditingGroupName(group.name);
                 }
               }}
+              title={group.name}
             >
               {editingGroupId === group.id ? (
                 <input
                   autoFocus
-                  className="quicklaunch-nav-input"
+                  className="tm-chip-input"
                   value={editingGroupName}
                   onChange={(event) => setEditingGroupName(event.target.value)}
+                  onClick={(event) => event.stopPropagation()}
                   onBlur={() => saveEditGroup(group.id)}
-                  onKeyDown={(event) => event.key === "Enter" && saveEditGroup(group.id)}
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    if (event.key === "Enter") saveEditGroup(group.id);
+                  }}
                 />
               ) : (
                 <>
-                  <span className="nav-text" title={group.name}>
-                    {group.name}
-                  </span>
+                  <span className="tm-chip-label">{group.name}</span>
                   {group.id !== "default" && (
-                    <span
-                      className="nav-delete"
+                    <button
+                      className="tm-chip-remove"
                       title="删除分组"
                       onClick={(event) => {
                         event.stopPropagation();
@@ -208,7 +226,7 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
                       }}
                     >
                       ×
-                    </span>
+                    </button>
                   )}
                 </>
               )}
@@ -217,7 +235,7 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
 
           {isAddingGroup ? (
             <input
-              className="quicklaunch-nav-input add-input"
+              className="tm-chip-input tm-chip-input-add"
               autoFocus
               placeholder="命名(回车)"
               value={newGroupName}
@@ -226,113 +244,95 @@ function TextManagerView({ onBack }: TextManagerViewProps) {
               onKeyDown={(event) => event.key === "Enter" && saveNewGroup()}
             />
           ) : (
-            <div
-              className="quicklaunch-nav-item add-btn"
+            <button
+              className="tm-chip tm-chip-add"
               title="新建分组"
               onClick={() => setIsAddingGroup(true)}
             >
-              + 新建
-            </div>
+              + 新建分组
+            </button>
           )}
         </div>
       </div>
 
-      <div className="sub-view-main textmanager-main">
-        <div className="sub-view-main-header textmanager-main-header">
-          <div>
-            <h2 className="sub-view-title active-group-title">{activeGroupName}</h2>
-            <div className="textmanager-subtitle">保存常用文本，按分组快速检索</div>
+      <div className="tm-body">
+        <section className="tm-list-panel">
+          <div className="tm-list-head">
+            <span className="tm-list-title">{activeGroupName}</span>
+            <span className="tm-list-count">{activeEntryCount} 条</span>
           </div>
-          <button className="add-program-btn" onClick={addEntry}>
-            + 新建文本
-          </button>
-        </div>
 
-        <div className="textmanager-toolbar">
-          <input
-            className="textmanager-search"
-            placeholder="搜索标题或内容..."
-            value={searchKeyword}
-            onChange={(event) => setSearchKeyword(event.target.value)}
-          />
-        </div>
-
-        <div className="textmanager-layout">
-          <div className="textmanager-list-panel">
-            {filteredEntries.length === 0 ? (
-              <div className="textmanager-empty">
-                {searchKeyword ? "没有匹配的文本" : "这个分组还没有保存文本"}
-              </div>
-            ) : (
-              <div className="textmanager-list">
-                {filteredEntries.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className={`textmanager-item ${selectedEntry?.id === entry.id ? "active" : ""}`}
-                    onClick={() => setSelectedEntryId(entry.id)}
-                  >
-                    <div className="textmanager-item-header">
-                      <div className="textmanager-item-title">
-                        {entry.title.trim() || "未命名文本"}
-                      </div>
-                      <button
-                        className="textmanager-item-delete"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          deleteEntry(entry.id);
-                        }}
-                        title="删除"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <div className="textmanager-item-preview">
-                      {entry.content.trim() || "暂无内容"}
-                    </div>
-                    <div className="textmanager-item-time">
-                      最近更新 {formatUpdatedAt(entry.updatedAt)}
-                    </div>
+          {filteredEntries.length === 0 ? (
+            <div className="tm-empty">
+              {searchKeyword ? "没有匹配的文本" : "这个分组还没有保存文本"}
+            </div>
+          ) : (
+            <div className="tm-list">
+              {filteredEntries.map((entry) => (
+                <div
+                  key={entry.id}
+                  className={`tm-item ${selectedEntry?.id === entry.id ? "active" : ""}`}
+                  onClick={() => setSelectedEntryId(entry.id)}
+                >
+                  <div className="tm-item-head">
+                    <span className="tm-item-title">
+                      {entry.title.trim() || "未命名文本"}
+                    </span>
+                    <button
+                      className="tm-item-remove"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        deleteEntry(entry.id);
+                      }}
+                      title="删除"
+                    >
+                      ×
+                    </button>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="textmanager-editor-panel">
-            {selectedEntry ? (
-              <>
-                <div className="textmanager-editor-actions">
-                  <button
-                    className="textmanager-copy-btn"
-                    onClick={() => copyEntry(selectedEntry)}
-                  >
-                    复制内容
-                  </button>
+                  <div className="tm-item-preview">
+                    {entry.content.trim() || "暂无内容"}
+                  </div>
+                  <div className="tm-item-time">最近更新 {formatUpdatedAt(entry.updatedAt)}</div>
                 </div>
-                <input
-                  className="textmanager-title-input"
-                  placeholder="输入标题，便于快速查找"
-                  value={selectedEntry.title}
-                  onChange={(event) =>
-                    updateEntry(selectedEntry.id, { title: event.target.value })
-                  }
-                />
-                <textarea
-                  className="json-input textmanager-textarea"
-                  placeholder="在这里保存你的常用文本、命令、提示词、模板内容..."
-                  value={selectedEntry.content}
-                  onChange={(event) =>
-                    updateEntry(selectedEntry.id, { content: event.target.value })
-                  }
-                />
-              </>
-            ) : (
-              <div className="textmanager-editor-empty">
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="tm-editor-panel">
+          {selectedEntry ? (
+            <>
+              <div className="tm-editor-toolbar">
+                <button className="tm-copy-btn" onClick={() => copyEntry(selectedEntry)}>
+                  复制内容
+                </button>
+              </div>
+              <input
+                className="tm-title-input"
+                placeholder="输入标题，便于快速查找"
+                value={selectedEntry.title}
+                onChange={(event) =>
+                  updateEntry(selectedEntry.id, { title: event.target.value })
+                }
+              />
+              <textarea
+                className="tm-textarea"
+                placeholder="在这里保存你的常用文本、命令、提示词、模板内容..."
+                value={selectedEntry.content}
+                onChange={(event) =>
+                  updateEntry(selectedEntry.id, { content: event.target.value })
+                }
+              />
+            </>
+          ) : (
+            <div className="tm-editor-empty">
+              <div className="tm-editor-empty-icon">📝</div>
+              <div className="tm-editor-empty-text">
                 先新建一条文本，或从左侧列表选择已有内容
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );

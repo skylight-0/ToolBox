@@ -1327,7 +1327,6 @@ function App() {
     todo: <TodoView onBack={() => setActiveView("main")} />,
     password: (
       <PasswordView
-        onBack={() => setActiveView("main")}
         isDialogOpenRef={isDialogOpenRef}
         requirePasswordAuth={passwordRequireAuth}
       />
@@ -1343,7 +1342,7 @@ function App() {
         }}
       />
     ),
-    textmanager: <TextManagerView onBack={() => setActiveView("main")} />,
+    textmanager: <TextManagerView />,
     quicklaunch: (
       <QuickLaunchView
         onBack={() => setActiveView("main")}

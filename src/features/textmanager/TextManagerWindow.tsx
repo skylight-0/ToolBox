@@ -1,10 +1,7 @@
 import { useEffect } from "react";
 import { emit } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import TextManagerView from "./TextManagerView";
 import { TOOLBOX_DATA_CHANGED } from "../../utils/dataSync";
-
-const appWindow = getCurrentWebviewWindow();
 
 export default function TextManagerWindow() {
   useEffect(() => {
@@ -20,11 +17,7 @@ export default function TextManagerWindow() {
 
   return (
     <div className="textmanager-window-standalone">
-      <TextManagerView
-        onBack={() => {
-          appWindow.close().catch(console.error);
-        }}
-      />
+      <TextManagerView />
     </div>
   );
 }
