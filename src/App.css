@@ -64,9 +64,11 @@ body,
   /* 整体防选中，提升原生感 */
 }
 
-/* Standalone text manager window — solid background to avoid white screen */
+/* Standalone window backgrounds — solid to avoid white screen */
 body:has(.textmanager-window-standalone),
-body:has(.textmanager-window-standalone) #root {
+body:has(.textmanager-window-standalone) #root,
+body:has(.password-window-standalone),
+body:has(.password-window-standalone) #root {
   background: #f0f4fa;
   overflow: auto;
 }
@@ -76,6 +78,14 @@ body:has(.textmanager-window-standalone) #root {
   overflow: auto;
 }
 .textmanager-window-standalone .sub-view {
+  background: #f0f4fa;
+}
+.password-window-standalone {
+  height: 100%;
+  background: #f0f4fa;
+  overflow: auto;
+}
+.password-window-standalone .sub-view {
   background: #f0f4fa;
 }
 

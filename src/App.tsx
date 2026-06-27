@@ -1028,23 +1028,26 @@ function App() {
     const tool = TOOLS.find((item) => item.id === toolId);
     if (!tool) return;
 
-    if (toolId === "textmanager") {
-      const label = "textmanager";
+    if (toolId === "textmanager" || toolId === "password") {
+      const label = toolId;
       const existing = await WebviewWindow.getByLabel(label);
       if (existing) {
         await existing.setFocus().catch(console.error);
       } else {
+        const windowConfig = toolId === "textmanager"
+          ? { url: "/#textmanager", title: "文本管理", width: 900, height: 680 }
+          : { url: "/#password", title: "密码管理", width: 900, height: 680 };
         const webview = new WebviewWindow(label, {
-          url: "/#textmanager",
-          title: "文本管理",
-          width: 900,
-          height: 680,
+          url: windowConfig.url,
+          title: windowConfig.title,
+          width: windowConfig.width,
+          height: windowConfig.height,
           resizable: true,
           decorations: true,
         });
         webview.once("tauri://created", () => {});
         webview.once("tauri://error", (e) => {
-          console.error("Failed to create textmanager window", e);
+          console.error(`Failed to create ${label} window`, e);
         });
       }
       return;
@@ -1143,8 +1146,8 @@ function App() {
           lastClipboardContentRef.current = resolved.payload.content;
           break;
         case "view":
-          if (resolved.payload.view === "textmanager") {
-            await handleToolClick("textmanager");
+          if (resolved.payload.view === "textmanager" || resolved.payload.view === "password") {
+            await handleToolClick(resolved.payload.view);
           } else {
             setActiveView(resolved.payload.view);
           }
@@ -1178,8 +1181,8 @@ function App() {
     setIsCommandPaletteOpen(false);
     setCommandQuery("");
     searchInputRef.current?.blur();
-    if (resolved.secondaryAction.view === "textmanager") {
-      await handleToolClick("textmanager");
+    if (resolved.secondaryAction.view === "textmanager" || resolved.secondaryAction.view === "password") {
+      await handleToolClick(resolved.secondaryAction.view);
     } else {
       setActiveView(resolved.secondaryAction.view);
     }
