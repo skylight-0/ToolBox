@@ -5,6 +5,8 @@ export type ActiveView =
   | "qrcode"
   | "systeminfo"
   | "network"
+  | "pingmonitor"
+  | "connectionmonitor"
   | "todo"
   | "password"
   | "clipboard"

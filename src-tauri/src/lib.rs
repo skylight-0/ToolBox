@@ -286,6 +286,33 @@ struct PingResult {
     output: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PingOnceResult {
+    host: String,
+    success: bool,
+    latency_ms: Option<f32>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectOnceRequest {
+    host: String,
+    port: u16,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectOnceResult {
+    host: String,
+    port: u16,
+    success: bool,
+    latency_ms: Option<f32>,
+    error: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct PasswordVault {
     domains: Vec<PasswordDomain>,
@@ -1845,6 +1872,153 @@ fn run_ping(request: PingRequest) -> Result<PingResult, String> {
     })
 }
 
+fn parse_single_ping_ms(output: &str) -> Option<f32> {
+    for line in output.lines() {
+        let lower = line.to_ascii_lowercase();
+        let value_start = if let Some(idx) = lower.find("time=") {
+            idx + "time=".len()
+        } else if let Some(idx) = lower.find("time =") {
+            idx + "time =".len()
+        } else if let Some(idx) = line.find("时间=") {
+            idx + "时间=".len()
+        } else if let Some(idx) = line.find("时间 =") {
+            idx + "时间 =".len()
+        } else {
+            continue;
+        };
+
+        let rest = line[value_start..].trim_start();
+        let number: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if number.is_empty() {
+            continue;
+        }
+        if let Ok(value) = number.parse::<f32>() {
+            return Some(value);
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn ping_once(request: PingRequest) -> Result<PingOnceResult, String> {
+    let host = normalize_network_host(&request.host)?;
+    let started_time = Instant::now();
+
+    #[cfg(target_os = "windows")]
+    let output = Command::new("ping")
+        .args(["-n", "1", "-w", "3000", &host])
+        .output();
+
+    #[cfg(target_os = "macos")]
+    let output = Command::new("ping")
+        .args(["-c", "1", "-W", "3000", &host])
+        .output();
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let output = Command::new("ping")
+        .args(["-c", "1", "-W", "3", &host])
+        .output();
+
+    #[cfg(not(any(unix, target_os = "windows")))]
+    let output = Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "当前平台不支持 ping",
+    ));
+
+    let _ = started_time;
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            return Ok(PingOnceResult {
+                host,
+                success: false,
+                latency_ms: None,
+                error: Some(format!("执行 ping 失败: {}", error)),
+            });
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let text = if stderr.trim().is_empty() {
+        stdout
+    } else if stdout.trim().is_empty() {
+        stderr
+    } else {
+        format!("{}\n{}", stdout.trim_end(), stderr)
+    };
+
+    let success = output.status.success();
+    let latency = parse_single_ping_ms(&text);
+    let error = if success {
+        None
+    } else {
+        Some(text.trim().to_string())
+    };
+
+    Ok(PingOnceResult {
+        host,
+        success: success && latency.is_some(),
+        latency_ms: latency,
+        error,
+    })
+}
+
+#[tauri::command]
+fn connect_once(request: ConnectOnceRequest) -> Result<ConnectOnceResult, String> {
+    let host = normalize_network_host(&request.host)?;
+    if request.port == 0 {
+        return Err("端口必须在 1-65535 之间".to_string());
+    }
+
+    let timeout = Duration::from_millis(request.timeout_ms.unwrap_or(3000).clamp(200, 10000));
+    let started_at = Instant::now();
+    let addresses = (host.as_str(), request.port)
+        .to_socket_addrs()
+        .map_err(|error| format!("解析目标失败: {}", error))?
+        .collect::<Vec<_>>();
+
+    if addresses.is_empty() {
+        return Ok(ConnectOnceResult {
+            host,
+            port: request.port,
+            success: false,
+            latency_ms: None,
+            error: Some("没有解析到可连接地址".to_string()),
+        });
+    }
+
+    let mut last_error = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, timeout) {
+            Ok(_) => {
+                let latency = started_at.elapsed().as_secs_f32() * 1000.0;
+                return Ok(ConnectOnceResult {
+                    host,
+                    port: request.port,
+                    success: true,
+                    latency_ms: Some(latency),
+                    error: None,
+                });
+            }
+            Err(error) => {
+                last_error = Some(format!("{}: {}", address, error));
+            }
+        }
+    }
+
+    Ok(ConnectOnceResult {
+        host,
+        port: request.port,
+        success: false,
+        latency_ms: None,
+        error: last_error,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1909,6 +2083,8 @@ pub fn run() {
             resolve_dns,
             check_tcp_port,
             run_ping,
+            ping_once,
+            connect_once,
             authenticate_password_vault,
             load_password_vault,
             save_password_vault

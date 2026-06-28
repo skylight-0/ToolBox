@@ -21,6 +21,8 @@ import {
 import JsonToolView from "./features/json/JsonToolView";
 import NetworkToolView from "./features/network/NetworkToolView";
 import PasswordView from "./features/password/PasswordView";
+import PingMonitorView from "./features/pingmonitor/PingMonitorView";
+import ConnectionMonitorView from "./features/connectionmonitor/ConnectionMonitorView";
 import PomodoroView from "./features/pomodoro/PomodoroView";
 import QrCodeView from "./features/qrcode/QrCodeView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
@@ -640,6 +642,30 @@ function App() {
         group: "动作",
         category: "actions",
         payload: { type: "view", view: "network" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-pingmonitor",
+        icon: "📶",
+        title: "打开 Ping 监控",
+        subtitle: "持续 Ping 服务器并绘制延迟折线图",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "pingmonitor" },
+        secondaryAction: { type: "none" },
+        score: 40,
+      },
+      {
+        id: "action-open-connectionmonitor",
+        icon: "🧭",
+        title: "打开连接监控",
+        subtitle: "持续 TCP 连接测试服务器丢包率与延迟",
+        meta: "动作",
+        group: "动作",
+        category: "actions",
+        payload: { type: "view", view: "connectionmonitor" },
         secondaryAction: { type: "none" },
         score: 40,
       },
@@ -1324,6 +1350,8 @@ function App() {
     qrcode: <QrCodeView onBack={() => setActiveView("main")} />,
     systeminfo: <SystemInfoView onBack={() => setActiveView("main")} />,
     network: <NetworkToolView onBack={() => setActiveView("main")} />,
+    pingmonitor: <PingMonitorView onBack={() => setActiveView("main")} />,
+    connectionmonitor: <ConnectionMonitorView onBack={() => setActiveView("main")} />,
     todo: <TodoView onBack={() => setActiveView("main")} />,
     password: (
       <PasswordView

@@ -17,6 +17,8 @@ export const TOOLS: ToolItem[] = [
   { id: "qrcode", kind: "view", view: "qrcode", icon: "▦", iconSrc: qrcodeIcon, label: "二维码生成器", desc: "文本链接生成二维码" },
   { id: "systeminfo", kind: "view", view: "systeminfo", icon: "▥", iconSrc: systemInfoIcon, label: "本机信息", desc: "CPU 内存磁盘网络" },
   { id: "network", kind: "view", view: "network", icon: "◌", iconSrc: networkIcon, label: "网络小工具", desc: "DNS Ping 端口检测" },
+  { id: "pingmonitor", kind: "view", view: "pingmonitor", icon: "📶", label: "Ping 监控", desc: "持续 Ping 与延迟折线图" },
+  { id: "connectionmonitor", kind: "view", view: "connectionmonitor", icon: "🧭", label: "连接监控", desc: "持续 TCP 连接测试丢包率与延迟" },
   { id: "todo", kind: "view", view: "todo", icon: "☑️", iconSrc: todoIcon, label: "待办事项", desc: "本地待办清单" },
   { id: "password", kind: "view", view: "password", icon: "🔐", label: "密码管理", desc: "Windows 用户密码保护的账号密码库" },
   { id: "textmanager", kind: "view", view: "textmanager", icon: "🗂️", iconSrc: textIcon, label: "文本管理", desc: "保存文本并按分组整理" },

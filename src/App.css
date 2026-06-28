@@ -1983,6 +1983,136 @@ body:has(.password-window-standalone) #root {
   user-select: text;
 }
 
+.ping-monitor {
+  gap: 14px;
+}
+
+.connection-monitor {
+  gap: 14px;
+}
+
+.ping-status-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  min-height: 40px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ping-status-pill.running {
+  border-color: rgba(132, 204, 22, 0.4);
+  color: var(--text-primary);
+  background: rgba(132, 204, 22, 0.08);
+}
+
+.ping-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  box-shadow: 0 0 0 0 rgba(132, 204, 22, 0.45);
+}
+
+.ping-dot.active {
+  background: #a3e635;
+  animation: ping-pulse 1.4s ease-out infinite;
+}
+
+@keyframes ping-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(163, 230, 53, 0.55);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(163, 230, 53, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(163, 230, 53, 0);
+  }
+}
+
+.ping-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+  gap: 10px;
+}
+
+.ping-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.ping-stat-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ping-stat-value {
+  color: var(--text-primary);
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 15px;
+  font-weight: 700;
+  word-break: break-all;
+}
+
+.ping-stat-value.warn {
+  color: #ffb86b;
+}
+
+.ping-chart-card {
+  min-width: 0;
+}
+
+.ping-chart-wrapper {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  background: rgba(0, 0, 0, 0.26);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  box-sizing: border-box;
+}
+
+.ping-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.ping-chart-label {
+  fill: var(--text-tertiary);
+  font-size: 10px;
+  font-family: 'Consolas', 'Courier New', monospace;
+}
+
+.ping-chart-line {
+  stroke: #5ac8fa;
+  fill: none;
+}
+
+.ping-chart-dot {
+  fill: #5ac8fa;
+  stroke: rgba(0, 0, 0, 0.4);
+  stroke-width: 1;
+}
+
 .main-error {
   margin-top: 12px;
   color: #ffb3b3;
