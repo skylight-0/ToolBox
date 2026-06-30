@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
@@ -8,7 +9,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, Networks, System, MINIMUM_CPU_UPDATE_INTERVAL};
 use tauri::{
-    LogicalPosition, LogicalSize, Manager, Monitor, Position, Size, State,
+    LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, PhysicalSize, Position,
+    Size, State, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 
@@ -18,6 +20,59 @@ pub(crate) struct AppState {
     sidebar_width: Mutex<u32>,
     sidebar_is_closing: Mutex<bool>,
     clipboard_db_path: PathBuf,
+    screenshot_session: Mutex<Option<ScreenshotSession>>,
+    pin_images: Mutex<HashMap<String, PinImageData>>,
+}
+
+const SCREENSHOT_SHORTCUT: &str = "Ctrl+Shift+A";
+const SCREENSHOT_SHORTCUT_SETTING_KEY: &str = "screenshot_shortcut_enabled";
+
+#[derive(Clone)]
+struct MonitorInfo {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    scale_factor: f64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenCapture {
+    image_data_url: String,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    scale_factor: f64,
+}
+
+struct ScreenshotSession {
+    captures: Vec<ScreenCapture>,
+    monitors: Vec<MonitorInfo>,
+    active_index: usize,
+    was_main_visible: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveScreenshotPayload {
+    image_data_url: String,
+    monitor_index: usize,
+    monitor_count: usize,
+    scale_factor: f64,
+    physical_width: u32,
+    physical_height: u32,
+    logical_width: f64,
+    logical_height: f64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PinImageData {
+    image_data_url: String,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -431,6 +486,41 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     }
 
     Ok(output)
+}
+
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut index = 0;
+
+    while index + 3 <= input.len() {
+        let b0 = input[index];
+        let b1 = input[index + 1];
+        let b2 = input[index + 2];
+        output.push(TABLE[(b0 >> 2) as usize] as char);
+        output.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        output.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+        output.push(TABLE[(b2 & 0x3f) as usize] as char);
+        index += 3;
+    }
+
+    let remaining = input.len() - index;
+    if remaining == 1 {
+        let b0 = input[index];
+        output.push(TABLE[(b0 >> 2) as usize] as char);
+        output.push(TABLE[((b0 & 0x03) << 4) as usize] as char);
+        output.push('=');
+        output.push('=');
+    } else if remaining == 2 {
+        let b0 = input[index];
+        let b1 = input[index + 1];
+        output.push(TABLE[(b0 >> 2) as usize] as char);
+        output.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        output.push(TABLE[((b1 & 0x0f) << 2) as usize] as char);
+        output.push('=');
+    }
+
+    output
 }
 
 fn open_clipboard_db(state: &State<'_, AppState>) -> Result<Connection, String> {
@@ -2019,6 +2109,372 @@ fn connect_once(request: ConnectOnceRequest) -> Result<ConnectOnceResult, String
     })
 }
 
+fn build_active_payload(
+    capture: &ScreenCapture,
+    monitor: &MonitorInfo,
+    monitor_count: usize,
+    active_index: usize,
+) -> ActiveScreenshotPayload {
+    let scale_factor = monitor.scale_factor;
+    ActiveScreenshotPayload {
+        image_data_url: capture.image_data_url.clone(),
+        monitor_index: active_index,
+        monitor_count,
+        scale_factor,
+        physical_width: capture.width,
+        physical_height: capture.height,
+        logical_width: monitor.width as f64 / scale_factor,
+        logical_height: monitor.height as f64 / scale_factor,
+    }
+}
+
+async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> {
+    // 重入保护：已存在截图覆盖窗口时仅聚焦
+    if let Some(existing) = app.get_webview_window("screenshot-overlay") {
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "主窗口未找到".to_string())?;
+
+    let monitors: Vec<MonitorInfo> = window
+        .available_monitors()
+        .map_err(|error| format!("读取显示器列表失败: {}", error))?
+        .iter()
+        .map(|monitor| MonitorInfo {
+            x: monitor.position().x,
+            y: monitor.position().y,
+            width: monitor.size().width as i32,
+            height: monitor.size().height as i32,
+            scale_factor: monitor.scale_factor(),
+        })
+        .collect();
+
+    if monitors.is_empty() {
+        return Err("没有检测到显示器".to_string());
+    }
+
+    let cursor = window.cursor_position().ok();
+    let was_main_visible = window.is_visible().unwrap_or(false);
+    let _ = window.hide();
+
+    let monitors_for_capture = monitors.clone();
+    let captures = tauri::async_runtime::spawn_blocking(move || {
+        // 等待侧边栏真正隐藏后再截图，避免把侧边栏本身拍进去
+        std::thread::sleep(Duration::from_millis(120));
+        let monitor_rects: Vec<platform::screenshot::MonitorRect> = monitors_for_capture
+            .iter()
+            .map(|monitor| platform::screenshot::MonitorRect {
+                x: monitor.x,
+                y: monitor.y,
+                width: monitor.width,
+                height: monitor.height,
+            })
+            .collect();
+        platform::screenshot::capture_screens(&monitor_rects)
+    })
+    .await
+    .map_err(|error| format!("截图任务执行失败: {}", error))??;
+
+    if captures.len() != monitors.len() {
+        return Err("部分显示器捕获失败".to_string());
+    }
+
+    let mut screen_captures = Vec::with_capacity(captures.len());
+    for (capture, monitor) in captures.iter().zip(monitors.iter()) {
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            encode_base64(&capture.png_bytes)
+        );
+        screen_captures.push(ScreenCapture {
+            image_data_url: data_url,
+            x: monitor.x,
+            y: monitor.y,
+            width: capture.width as u32,
+            height: capture.height as u32,
+            scale_factor: monitor.scale_factor,
+        });
+    }
+
+    let active_index = cursor
+        .and_then(|position| {
+            monitors
+                .iter()
+                .position(|monitor| {
+                    position.x >= monitor.x as f64
+                        && position.x < (monitor.x + monitor.width) as f64
+                        && position.y >= monitor.y as f64
+                        && position.y < (monitor.y + monitor.height) as f64
+                })
+        })
+        .unwrap_or(0);
+
+    {
+        let state: State<'_, AppState> = app.state();
+        let mut session = state
+            .screenshot_session
+            .lock()
+            .map_err(|error| format!("锁定截图会话失败: {}", error))?;
+        *session = Some(ScreenshotSession {
+            captures: screen_captures,
+            monitors: monitors.clone(),
+            active_index,
+            was_main_visible,
+        });
+    }
+
+    let active = &monitors[active_index];
+    let scale_factor = active.scale_factor;
+    let overlay = WebviewWindowBuilder::new(
+        &app,
+        "screenshot-overlay",
+        WebviewUrl::App("/#screenshot".into()),
+    )
+    .title("")
+    .position(active.x as f64 / scale_factor, active.y as f64 / scale_factor)
+    .inner_size(
+        active.width as f64 / scale_factor,
+        active.height as f64 / scale_factor,
+    )
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .shadow(false)
+    .focused(true)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("创建截图覆盖窗口失败: {}", error))?;
+
+    // 用物理坐标再次校准位置与尺寸，避免多显示器缩放不一致导致的偏移
+    let _ = overlay.set_size(Size::Physical(PhysicalSize::new(
+        active.width as u32,
+        active.height as u32,
+    )));
+    let _ = overlay.set_position(Position::Physical(PhysicalPosition::new(
+        active.x,
+        active.y,
+    )));
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_screenshot(app: tauri::AppHandle) -> Result<(), String> {
+    start_screenshot_internal(app).await
+}
+
+#[tauri::command]
+fn get_active_screenshot(
+    state: State<'_, AppState>,
+) -> Result<ActiveScreenshotPayload, String> {
+    let session = state
+        .screenshot_session
+        .lock()
+        .map_err(|error| format!("锁定截图会话失败: {}", error))?;
+    let session = session
+        .as_ref()
+        .ok_or_else(|| "截图会话未启动".to_string())?;
+    let active_index = session.active_index;
+    let capture = &session.captures[active_index];
+    let monitor = &session.monitors[active_index];
+    Ok(build_active_payload(
+        capture,
+        monitor,
+        session.captures.len(),
+        active_index,
+    ))
+}
+
+#[tauri::command]
+fn switch_screenshot_monitor(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    direction: i32,
+) -> Result<ActiveScreenshotPayload, String> {
+    let mut session_lock = state
+        .screenshot_session
+        .lock()
+        .map_err(|error| format!("锁定截图会话失败: {}", error))?;
+    let session = session_lock
+        .as_mut()
+        .ok_or_else(|| "截图会话未启动".to_string())?;
+    let count = session.captures.len();
+    if count == 0 {
+        return Err("没有可切换的屏幕".to_string());
+    }
+    let next = ((session.active_index as i32 + direction).rem_euclid(count as i32)) as usize;
+    session.active_index = next;
+    let monitor = session.monitors[next].clone();
+    let capture = session.captures[next].clone();
+    drop(session_lock);
+
+    if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
+        let _ = overlay.set_size(Size::Physical(PhysicalSize::new(
+            monitor.width as u32,
+            monitor.height as u32,
+        )));
+        let _ = overlay.set_position(Position::Physical(PhysicalPosition::new(
+            monitor.x,
+            monitor.y,
+        )));
+        let _ = overlay.set_focus();
+    }
+
+    Ok(build_active_payload(&capture, &monitor, count, next))
+}
+
+#[tauri::command]
+fn cancel_screenshot(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
+        let _ = overlay.close();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn create_pin_window(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    image_data_url: String,
+    crop_x: i32,
+    crop_y: i32,
+    crop_width: u32,
+    crop_height: u32,
+) -> Result<(), String> {
+    if crop_width == 0 || crop_height == 0 {
+        return Err("钉图区域无效".to_string());
+    }
+
+    let (active, scale_factor) = {
+        let session = state
+            .screenshot_session
+            .lock()
+            .map_err(|error| format!("锁定截图会话失败: {}", error))?;
+        let session = session
+            .as_ref()
+            .ok_or_else(|| "截图会话未启动".to_string())?;
+        let active = &session.monitors[session.active_index];
+        (active.clone(), active.scale_factor)
+    };
+
+    let pin_x = active.x + crop_x;
+    let pin_y = active.y + crop_y;
+    let id = format!("pin-{}", chrono_like_timestamp());
+
+    {
+        let mut pins = state
+            .pin_images
+            .lock()
+            .map_err(|error| format!("锁定钉图数据失败: {}", error))?;
+        pins.insert(
+            id.clone(),
+            PinImageData {
+                image_data_url,
+                width: (crop_width as f64 / scale_factor).round() as u32,
+                height: (crop_height as f64 / scale_factor).round() as u32,
+            },
+        );
+    }
+
+    let logical_width = crop_width as f64 / scale_factor;
+    let logical_height = crop_height as f64 / scale_factor;
+    let logical_x = pin_x as f64 / scale_factor;
+    let logical_y = pin_y as f64 / scale_factor;
+
+    let pin_window = WebviewWindowBuilder::new(&app, &id, WebviewUrl::App("/#pin".into()))
+        .title("")
+        .position(logical_x, logical_y)
+        .inner_size(logical_width, logical_height)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(true)
+        .shadow(true)
+        .focused(true)
+        .visible(false)
+        .build()
+        .map_err(|error| format!("创建钉图窗口失败: {}", error))?;
+
+    // 物理坐标校准，保证贴在用户框选的位置
+    let _ = pin_window.set_position(Position::Physical(PhysicalPosition::new(pin_x, pin_y)));
+    let _ = pin_window.set_size(Size::Physical(PhysicalSize::new(crop_width, crop_height)));
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_pin_image(label: String, state: State<'_, AppState>) -> Result<PinImageData, String> {
+    let pins = state
+        .pin_images
+        .lock()
+        .map_err(|error| format!("锁定钉图数据失败: {}", error))?;
+    pins.get(&label)
+        .cloned()
+        .ok_or_else(|| "钉图数据不存在".to_string())
+}
+
+#[tauri::command]
+fn close_pin_image(label: String, state: State<'_, AppState>) -> Result<(), String> {
+    let mut pins = state
+        .pin_images
+        .lock()
+        .map_err(|error| format!("锁定钉图数据失败: {}", error))?;
+    pins.remove(&label);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_screenshot_shortcut_enabled(state: State<'_, AppState>) -> Result<bool, String> {
+    let connection = open_clipboard_db(&state)?;
+    let value = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            params![SCREENSHOT_SHORTCUT_SETTING_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("读取截图快捷键设置失败: {}", error))?;
+    Ok(value.unwrap_or_else(|| "true".to_string()) == "true")
+}
+
+#[tauri::command]
+fn set_screenshot_shortcut_enabled(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    connection
+        .execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![
+                SCREENSHOT_SHORTCUT_SETTING_KEY,
+                if enabled { "true" } else { "false" }
+            ],
+        )
+        .map_err(|error| format!("保存截图快捷键设置失败: {}", error))?;
+
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let manager = app.global_shortcut();
+    if enabled {
+        if manager.is_registered(SCREENSHOT_SHORTCUT) {
+            return Ok(());
+        }
+        manager
+            .register(SCREENSHOT_SHORTCUT)
+            .map_err(|error| format!("注册截图快捷键失败: {}", error))?;
+    } else {
+        let _ = manager.unregister(SCREENSHOT_SHORTCUT);
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2035,6 +2491,23 @@ pub fn run() {
                     request_hide_sidebar(window, &state);
                 }
             }
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                if window.label() == "screenshot-overlay" {
+                    let state: State<'_, AppState> = window.state();
+                    let restore_sidebar = state
+                        .screenshot_session
+                        .lock()
+                        .ok()
+                        .and_then(|session| session.as_ref().map(|item| item.was_main_visible))
+                        .unwrap_or(false);
+                    if let Ok(mut session) = state.screenshot_session.lock() {
+                        *session = None;
+                    }
+                    if restore_sidebar {
+                        show_sidebar_window(window.app_handle(), &window.state());
+                    }
+                }
+            }
             _ => {}
         })
         .plugin(
@@ -2045,6 +2518,17 @@ pub fn run() {
                     {
                         eprintln!("全局快捷键 Alt+Space 已触发");
                         toggle_sidebar_window(app);
+                    }
+                    if event.state == ShortcutState::Pressed
+                        && shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyA)
+                    {
+                        eprintln!("全局快捷键 Ctrl+Shift+A 已触发截图");
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(error) = start_screenshot_internal(app_handle).await {
+                                eprintln!("截图启动失败: {}", error);
+                            }
+                        });
                     }
                 })
                 .build(),
@@ -2087,7 +2571,16 @@ pub fn run() {
             connect_once,
             authenticate_password_vault,
             load_password_vault,
-            save_password_vault
+            save_password_vault,
+            start_screenshot,
+            get_active_screenshot,
+            switch_screenshot_monitor,
+            cancel_screenshot,
+            create_pin_window,
+            get_pin_image,
+            close_pin_image,
+            get_screenshot_shortcut_enabled,
+            set_screenshot_shortcut_enabled
         ])
         .setup(|app| {
             let app_data_dir = app
@@ -2104,6 +2597,8 @@ pub fn run() {
                 sidebar_width: Mutex::new(400),
                 sidebar_is_closing: Mutex::new(false),
                 clipboard_db_path,
+                screenshot_session: Mutex::new(None),
+                pin_images: Mutex::new(HashMap::new()),
             });
 
             // 注册 Alt+Space 全局快捷键
@@ -2124,6 +2619,31 @@ pub fn run() {
                     if let Ok(record) = insert_notification_record(&connection, &input) {
                         emit_app_notification(app, &record);
                     }
+                }
+            }
+
+            // 注册截图快捷键 Ctrl+Shift+A（受设置项控制，默认开启）
+            let screenshot_shortcut_enabled = {
+                let state: State<'_, AppState> = app.state();
+                open_clipboard_db(&state)
+                    .ok()
+                    .and_then(|connection| {
+                        connection
+                            .query_row(
+                                "SELECT value FROM app_settings WHERE key = ?1",
+                                params![SCREENSHOT_SHORTCUT_SETTING_KEY],
+                                |row| row.get::<_, String>(0),
+                            )
+                            .optional()
+                            .ok()
+                    })
+                    .flatten()
+                    .unwrap_or_else(|| "true".to_string())
+                    == "true"
+            };
+            if screenshot_shortcut_enabled {
+                if let Err(error) = app.global_shortcut().register(SCREENSHOT_SHORTCUT) {
+                    eprintln!("注册截图快捷键 {} 失败: {}", SCREENSHOT_SHORTCUT, error);
                 }
             }
 

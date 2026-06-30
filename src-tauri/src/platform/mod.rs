@@ -1,6 +1,29 @@
 #[cfg(target_os = "windows")]
 mod windows;
 
+#[cfg(target_os = "windows")]
+pub mod screenshot;
+
+#[cfg(not(target_os = "windows"))]
+pub mod screenshot {
+    pub struct MonitorRect {
+        pub x: i32,
+        pub y: i32,
+        pub width: i32,
+        pub height: i32,
+    }
+
+    pub struct CaptureOutput {
+        pub png_bytes: Vec<u8>,
+        pub width: i32,
+        pub height: i32,
+    }
+
+    pub fn capture_screens(_monitors: &[MonitorRect]) -> Result<Vec<CaptureOutput>, String> {
+        Err("截图仅支持 Windows 平台".to_string())
+    }
+}
+
 use tauri::WebviewWindow;
 use crate::LaunchTargetRequest;
 

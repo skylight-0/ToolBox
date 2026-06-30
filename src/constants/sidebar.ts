@@ -25,5 +25,6 @@ export const TOOLS: ToolItem[] = [
   { id: "clipboard", kind: "view", view: "clipboard", icon: "📋", iconSrc: clipboardIcon, label: "剪切板增强", desc: "复制历史与图片预览" },
   { id: "quicklaunch", kind: "view", view: "quicklaunch", icon: "📌", iconSrc: quickIcon, label: "快捷访问", desc: "常用程序启动" },
   { id: "pomodoro", kind: "view", view: "pomodoro", icon: "🍅", iconSrc: tomatoIcon, label: "番茄钟", desc: "专注与休息计时" },
+  { id: "screenshot", kind: "view", view: "screenshot", icon: "📷", label: "截图钉图", desc: "快捷键截图并贴在桌面" },
   { id: "settings", kind: "view", view: "settings", icon: "⚙️", iconSrc: settingIcon,label: "设置", desc: "启动、剪切板与侧边栏" },
 ];

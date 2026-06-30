@@ -4680,6 +4680,7 @@ checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 name = "toolbox"
 version = "0.1.0"
 dependencies = [
+ "image",
  "rusqlite",
  "serde",
  "serde_json",

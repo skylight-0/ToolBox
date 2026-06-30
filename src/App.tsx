@@ -28,6 +28,7 @@ import QrCodeView from "./features/qrcode/QrCodeView";
 import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
 import SettingsView from "./features/settings/SettingsView";
 import type { ClipboardDefaultDateFilter } from "./features/settings/SettingsView";
+import ScreenshotView from "./features/screenshot/ScreenshotView";
 import SystemInfoView from "./features/systeminfo/SystemInfoView";
 import TextManagerView from "./features/textmanager/TextManagerView";
 import TodoView from "./features/todo/TodoView";
@@ -216,6 +217,7 @@ function App() {
   const [isClipboardMonitoring, setIsClipboardMonitoring] = useState(true);
   const [clipboardDefaultDateFilter, setClipboardDefaultDateFilter] = useState<ClipboardDefaultDateFilter>("today");
   const [passwordRequireAuth, setPasswordRequireAuth] = useState(true);
+  const [screenshotShortcutEnabled, setScreenshotShortcutEnabled] = useState(true);
   const [toolOrder, setToolOrder] = useState<ToolId[]>(DEFAULT_TOOL_ORDER);
   const [textSearchEntries, setTextSearchEntries] = useState<TextEntrySearchItem[]>([]);
   const [todoSearchItems, setTodoSearchItems] = useState<TodoSearchItem[]>([]);
@@ -356,8 +358,9 @@ function App() {
       invoke<string | null>("get_setting", { key: "clipboard_default_date_filter" }),
       invoke<string | null>("get_setting", { key: PASSWORD_REQUIRE_AUTH_SETTING_KEY }),
       invoke<string | null>("get_setting", { key: TOOL_ORDER_SETTING_KEY }),
+      invoke<boolean>("get_screenshot_shortcut_enabled"),
     ])
-      .then(([monitoringValue, dateFilterValue, passwordRequireAuthValue, toolOrderValue]) => {
+      .then(([monitoringValue, dateFilterValue, passwordRequireAuthValue, toolOrderValue, screenshotShortcutValue]) => {
         if (monitoringValue === "false") {
           setIsClipboardMonitoring(false);
         }
@@ -372,6 +375,7 @@ function App() {
           setPasswordRequireAuth(false);
         }
         setToolOrder(parseToolOrderSetting(toolOrderValue));
+        setScreenshotShortcutEnabled(screenshotShortcutValue);
       })
       .catch(console.error);
     const unlistenAppNotification = listen<SidebarNotification>("app-notification", (event) => {
@@ -1046,6 +1050,14 @@ function App() {
     }).catch(console.error);
   };
 
+  const updateScreenshotShortcut = (enabled: boolean) => {
+    setScreenshotShortcutEnabled(enabled);
+    void invoke("set_screenshot_shortcut_enabled", { enabled }).catch((error) => {
+      console.error(error);
+      setScreenshotShortcutEnabled(!enabled);
+    });
+  };
+
   const resetToolOrder = () => {
     updateToolOrder(DEFAULT_TOOL_ORDER);
   };
@@ -1378,6 +1390,13 @@ function App() {
       />
     ),
     pomodoro: <PomodoroView onBack={() => setActiveView("main")} />,
+    screenshot: (
+      <ScreenshotView
+        onBack={() => setActiveView("main")}
+        shortcutEnabled={screenshotShortcutEnabled}
+        onShortcutToggle={updateScreenshotShortcut}
+      />
+    ),
     settings: (
       <SettingsView
         onBack={() => setActiveView("main")}

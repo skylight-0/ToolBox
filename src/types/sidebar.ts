@@ -13,6 +13,7 @@ export type ActiveView =
   | "quicklaunch"
   | "textmanager"
   | "pomodoro"
+  | "screenshot"
   | "settings";
 
 export type ViewToolId = Exclude<ActiveView, "main">;

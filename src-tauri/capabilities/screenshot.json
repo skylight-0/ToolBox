@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screenshot-capability",
+  "description": "Capability for the fullscreen screenshot overlay window",
+  "windows": ["screenshot-overlay"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "dialog:allow-save",
+    "clipboard-manager:allow-write-image"
+  ]
+}

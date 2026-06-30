@@ -6856,3 +6856,263 @@ body:has(.password-window-standalone) #root {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============ 截图与钉图 ============ */
+
+.screenshot-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.screenshot-hero {
+  padding: 24px 20px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(88, 101, 242, 0.18), rgba(46, 204, 145, 0.16));
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.screenshot-hero-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.screenshot-hero-desc {
+  font-size: 13px;
+  opacity: 0.78;
+  line-height: 1.6;
+}
+
+.screenshot-start-btn {
+  margin-top: 6px;
+  padding: 8px 18px;
+  font-size: 14px;
+}
+
+.screenshot-tip-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  opacity: 0.82;
+  line-height: 1.6;
+}
+
+/* 全屏覆盖层 */
+.screenshot-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+  cursor: crosshair;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.screenshot-bg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.screenshot-loading {
+  background: transparent;
+  cursor: wait;
+}
+
+.screenshot-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  cursor: default;
+  font-size: 14px;
+}
+
+.screenshot-error-btn {
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+}
+
+.screenshot-rect {
+  position: absolute;
+  border: 1px solid #3b82f6;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.screenshot-size {
+  position: absolute;
+  top: -22px;
+  left: 0;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.screenshot-toolbar {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(20, 22, 28, 0.92);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+
+.screenshot-toolbar button {
+  padding: 5px 12px;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.screenshot-toolbar button:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.85);
+  border-color: rgba(59, 130, 246, 0.9);
+}
+
+.screenshot-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.screenshot-monitor-switch {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(20, 22, 28, 0.85);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: auto;
+}
+
+.screenshot-monitor-switch button {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.screenshot-monitor-switch button:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.85);
+}
+
+.screenshot-monitor-switch button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.screenshot-hint {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(20, 22, 28, 0.75);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* 钉图窗口 */
+.pin-window {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+  cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.pin-image {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.pin-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 120px;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(20, 22, 28, 0.95);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: default;
+}
+
+.pin-menu button {
+  padding: 6px 12px;
+  font-size: 13px;
+  text-align: left;
+  color: #fff;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.pin-menu button:hover {
+  background: rgba(59, 130, 246, 0.85);
+}
