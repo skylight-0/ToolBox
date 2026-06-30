@@ -1,7 +1,5 @@
-use std::io::Cursor;
 use std::ptr;
 
-use image::{DynamicImage, ImageFormat, RgbImage};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
     SelectObject, HGDIOBJ, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC, SRCCOPY,
@@ -15,7 +13,7 @@ pub struct MonitorRect {
 }
 
 pub struct CaptureOutput {
-    pub png_bytes: Vec<u8>,
+    pub rgba: Vec<u8>,
     pub width: i32,
     pub height: i32,
 }
@@ -30,8 +28,8 @@ pub fn capture_screens(monitors: &[MonitorRect]) -> Result<Vec<CaptureOutput>, S
         let mut results = Vec::with_capacity(monitors.len());
         for monitor in monitors {
             match capture_monitor(hdc_screen, monitor.x, monitor.y, monitor.width, monitor.height) {
-                Ok(bytes) => results.push(CaptureOutput {
-                    png_bytes: bytes,
+                Ok(rgba) => results.push(CaptureOutput {
+                    rgba,
                     width: monitor.width,
                     height: monitor.height,
                 }),
@@ -108,25 +106,18 @@ unsafe fn capture_monitor(
 
     let pixel_count = (width as usize) * (height as usize);
     let src = std::slice::from_raw_parts(bits as *const u8, pixel_count * 4);
-    // GDI 32 位 DIB 的内存布局为 BGRA，这里转换为 PNG 需要的 RGB 顺序
-    let mut rgb = Vec::with_capacity(pixel_count * 3);
+    // GDI 32 位 DIB 的内存布局为 BGRA，这里改为 RGBA 顺序并补 alpha=255
+    let mut rgba = Vec::with_capacity(pixel_count * 4);
     for index in 0..pixel_count {
-        rgb.push(src[index * 4 + 2]); // R
-        rgb.push(src[index * 4 + 1]); // G
-        rgb.push(src[index * 4 + 0]); // B
+        rgba.push(src[index * 4 + 2]); // R
+        rgba.push(src[index * 4 + 1]); // G
+        rgba.push(src[index * 4 + 0]); // B
+        rgba.push(255);                // A
     }
 
     let _ = SelectObject(hdc_mem, previous_object);
     let _ = DeleteObject(HGDIOBJ::from(bitmap));
     let _ = DeleteDC(hdc_mem);
 
-    let image = RgbImage::from_raw(width as u32, height as u32, rgb)
-        .ok_or_else(|| "构造图像缓冲区失败".to_string())?;
-    let dynamic = DynamicImage::ImageRgb8(image);
-
-    let mut buffer = Cursor::new(Vec::with_capacity((pixel_count * 3) / 2));
-    dynamic
-        .write_to(&mut buffer, ImageFormat::Png)
-        .map_err(|error| format!("PNG 编码失败: {}", error))?;
-    Ok(buffer.into_inner())
+    Ok(rgba)
 }

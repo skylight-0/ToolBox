@@ -1,11 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
-  cropToClipboardImage,
-  cropToDataUrl,
-  loadImage,
   normalizeRect,
   type ActiveScreenshotPayload,
   type CropRect,
@@ -20,34 +18,85 @@ export default function ScreenshotOverlay() {
   const [imageReady, setImageReady] = useState(false);
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const drawingRef = useRef<{ x: number; y: number } | null>(null);
-  const sourceImageRef = useRef<HTMLImageElement | null>(null);
   const rectRef = useRef<CropRect | null>(null);
   const payloadRef = useRef<ActiveScreenshotPayload | null>(null);
   const busyRef = useRef(false);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const commitRect = useCallback((next: CropRect | null) => {
     rectRef.current = next;
     setRect(next);
   }, []);
 
+  const applyPayload = useCallback(async (data: ActiveScreenshotPayload) => {
+    payloadRef.current = data;
+    setPayload(data);
+    commitRect(null);
+    setImageReady(false);
+    // 每次收到新截图时重置 busy，避免上一次操作遗留的 busy 状态导致按钮禁用
+    busyRef.current = false;
+    setBusy(false);
+    // 直接从自定义协议拉取原始 RGBA 字节，用 Canvas putImageData 绘制，
+    // 完全绕开 PNG 编/解码，是最快的背景渲染方式
+    try {
+      const response = await fetch(
+        `http://screenshot-frame.localhost/active?v=${data.frameId}`,
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const buffer = await response.arrayBuffer();
+      const rgba = new Uint8ClampedArray(buffer);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.width = data.physicalWidth;
+        canvas.height = data.physicalHeight;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.putImageData(
+            new ImageData(rgba, data.physicalWidth, data.physicalHeight),
+            0,
+            0,
+          );
+        }
+      }
+      setImageReady(true);
+    } catch (loadError) {
+      setError(`加载截图失败: ${String(loadError)}`);
+    }
+  }, [commitRect]);
+
+  // 监听 Rust 推送过来的截图数据；overlay 常驻后由事件驱动刷新
   useEffect(() => {
-    overlayWindow.show().catch(console.error);
+    let unlistenPayload: (() => void) | undefined;
+    let unlistenReset: (() => void) | undefined;
     let cancelled = false;
-    invoke<ActiveScreenshotPayload>("get_active_screenshot")
-      .then(async (data) => {
-        if (cancelled) return;
-        payloadRef.current = data;
-        setPayload(data);
-        const image = await loadImage(data.imageDataUrl);
-        if (cancelled) return;
-        sourceImageRef.current = image;
-        setImageReady(true);
-      })
-      .catch((invokeError) => {
-        if (!cancelled) setError(String(invokeError));
-      });
+    void (async () => {
+      const [unsubscribePayload, unsubscribeReset] = await Promise.all([
+        listen<ActiveScreenshotPayload>("screenshot-payload", (event) => {
+          if (!cancelled) void applyPayload(event.payload);
+        }),
+        listen<void>("screenshot-reset", () => {
+          if (cancelled) return;
+          setPayload(null);
+          setRect(null);
+          setPointer(null);
+          setImageReady(false);
+          setError("");
+          setBusy(false);
+          drawingRef.current = null;
+          rectRef.current = null;
+          payloadRef.current = null;
+          busyRef.current = false;
+        }),
+      ]);
+      unlistenPayload = unsubscribePayload;
+      unlistenReset = unsubscribeReset;
+    })().catch((listenError) => {
+      if (!cancelled) setError(`监听截图事件失败: ${String(listenError)}`);
+    });
     return () => {
       cancelled = true;
+      unlistenPayload?.();
+      unlistenReset?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -61,17 +110,9 @@ export default function ScreenshotOverlay() {
       if (busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
-      setImageReady(false);
-      commitRect(null);
       try {
-        const next = await invoke<ActiveScreenshotPayload>("switch_screenshot_monitor", {
-          direction,
-        });
-        payloadRef.current = next;
-        setPayload(next);
-        const image = await loadImage(next.imageDataUrl);
-        sourceImageRef.current = image;
-        setImageReady(true);
+        // Rust 会移动 overlay 并通过 screenshot-payload 事件回推新屏数据
+        await invoke("switch_screenshot_monitor", { direction });
       } catch (switchError) {
         setError(String(switchError));
       } finally {
@@ -79,48 +120,29 @@ export default function ScreenshotOverlay() {
         setBusy(false);
       }
     },
-    [commitRect],
+    [],
   );
 
   const finish = useCallback(
     async (action: "copy" | "save" | "pin") => {
       if (busyRef.current) return;
       const activeRect = rectRef.current;
-      const source = sourceImageRef.current;
       const activePayload = payloadRef.current;
-      if (!activeRect || !source || !activePayload) return;
+      if (!activeRect || !activePayload) return;
       busyRef.current = true;
       setBusy(true);
       try {
-        if (action === "copy") {
-          const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
-          const image = await cropToClipboardImage(source, activePayload.scaleFactor, activeRect);
-          await writeImage(image);
-          await image.close().catch(() => {});
-        } else if (action === "save") {
-          const { save } = await import("@tauri-apps/plugin-dialog");
-          const path = await save({
-            defaultPath: `screenshot-${Date.now()}.png`,
-            filters: [{ name: "PNG", extensions: ["png"] }],
-          });
-          if (!path) {
-            busyRef.current = false;
-            setBusy(false);
-            return;
-          }
-          const dataUrl = await cropToDataUrl(source, activePayload.scaleFactor, activeRect);
-          await invoke("save_image_data", { path, dataUrl });
-        } else {
-          const sf = activePayload.scaleFactor;
-          const dataUrl = await cropToDataUrl(source, activePayload.scaleFactor, activeRect);
-          await invoke("create_pin_window", {
-            imageDataUrl: dataUrl,
-            cropX: Math.round(activeRect.x * sf),
-            cropY: Math.round(activeRect.y * sf),
-            cropWidth: Math.round(activeRect.w * sf),
-            cropHeight: Math.round(activeRect.h * sf),
-          });
-        }
+        await invoke("apply_screenshot_action", {
+          payload: {
+            action,
+            rect: {
+              x: activeRect.x,
+              y: activeRect.y,
+              w: activeRect.w,
+              h: activeRect.h,
+            },
+          },
+        });
         await cancel();
       } catch (actionError) {
         setError(String(actionError));
@@ -172,6 +194,17 @@ export default function ScreenshotOverlay() {
     }
   };
 
+  useEffect(() => {
+    const onWindowBlur = () => {
+      // 失焦时若仍在绘图状态，丢弃当前选区，避免悬浮状态
+      drawingRef.current = null;
+    };
+    overlayWindow.onFocusChanged(({ payload: focused }) => {
+      if (!focused) onWindowBlur();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (error) {
     return (
       <div className="screenshot-overlay screenshot-error">
@@ -202,12 +235,7 @@ export default function ScreenshotOverlay() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
-      <img
-        className="screenshot-bg"
-        src={payload?.imageDataUrl ?? ""}
-        draggable={false}
-        onLoad={() => setImageReady(true)}
-      />
+      <canvas ref={canvasRef} className="screenshot-bg" />
 
       {!imageReady && <div className="screenshot-dim" />}
 

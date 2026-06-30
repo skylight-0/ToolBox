@@ -1,7 +1,7 @@
 import { Image as TauriImage } from "@tauri-apps/api/image";
 
 export type ActiveScreenshotPayload = {
-  imageDataUrl: string;
+  frameId: number;
   monitorIndex: number;
   monitorCount: number;
   scaleFactor: number;
