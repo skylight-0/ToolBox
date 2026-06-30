@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as echarts from "echarts/core";
+import type { EChartsOption } from "echarts";
+import { LineChart } from "echarts/charts";
+import { GridComponent, TooltipComponent } from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
 import SubViewHeader from "../../components/SubViewHeader";
+
+echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
 type PingMonitorViewProps = {
   onBack: () => void;
@@ -21,8 +28,6 @@ type PingSample = {
 
 const MAX_SAMPLES = 80;
 const FREQUENCY_OPTIONS = [1, 2, 5, 10, 30];
-const CHART_HEIGHT = 180;
-const CHART_MIN_YMAX = 50;
 
 function cleanHost(value: string) {
   return value.trim();
@@ -43,6 +48,81 @@ function formatPercent(value: number) {
   return `${value.toFixed(value % 1 === 0 ? 0 : 1)}%`;
 }
 
+function formatTimestamp(value: number) {
+  const date = new Date(value);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function buildPingChartOption(samples: PingSample[]): EChartsOption {
+  return {
+    grid: { left: 50, right: 20, top: 18, bottom: 30 },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: "rgba(15, 23, 42, 0.94)",
+      borderColor: "rgba(148, 163, 184, 0.24)",
+      borderWidth: 1,
+      padding: [8, 10],
+      textStyle: { color: "#f8fafc", fontSize: 12 },
+      axisPointer: {
+        type: "line",
+        lineStyle: { color: "rgba(37, 99, 235, 0.4)", width: 1 },
+      },
+      formatter: (params: any) => {
+        const p = Array.isArray(params) ? params[0] : params;
+        const dataIndex: number = p?.dataIndex;
+        const sample = Number.isInteger(dataIndex) ? samples[dataIndex] : undefined;
+        if (!sample) return "";
+        const rows: Array<[string, string]> = [
+          ["采集时间", formatTimestamp(sample.timestamp)],
+          ["延迟", typeof sample.latency === "number" && Number.isFinite(sample.latency) ? formatMs(sample.latency) : "失败"],
+          ["当前时间", formatTimestamp(Date.now())],
+        ];
+        return rows
+          .map(
+            ([label, value]) =>
+              `<div style="display:flex;justify-content:space-between;gap:14px;line-height:1.7;white-space:nowrap;">` +
+              `<span style="color:#94a3b8;">${label}</span>` +
+              `<span style="font-weight:600;font-family:Consolas,'Courier New',monospace;">${value}</span>` +
+              `</div>`
+          )
+          .join("");
+      },
+    },
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: samples.map((_, index) => String(index + 1)),
+      axisLine: { lineStyle: { color: "rgba(76, 96, 130, 0.2)" } },
+      axisTick: { show: false },
+      axisLabel: { color: "#737f91", fontSize: 10, hideOverlap: true },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: "value",
+      min: 0,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: "#737f91", fontSize: 10, formatter: "{value} ms" },
+      splitLine: { lineStyle: { color: "rgba(15, 23, 42, 0.08)" } },
+    },
+    series: [
+      {
+        type: "line",
+        showSymbol: false,
+        symbol: "circle",
+        symbolSize: 6,
+        connectNulls: false,
+        data: samples.map((sample) => sample.latency),
+        lineStyle: { width: 2, color: "#2563eb" },
+        itemStyle: { color: "#2563eb" },
+        areaStyle: { color: "rgba(37, 99, 235, 0.1)" },
+        emphasis: { focus: "series" },
+      },
+    ],
+  };
+}
+
 function PingMonitorView({ onBack }: PingMonitorViewProps) {
   const [target, setTarget] = useState("example.com");
   const [frequency, setFrequency] = useState(2);
@@ -50,8 +130,8 @@ function PingMonitorView({ onBack }: PingMonitorViewProps) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
 
-  const [chartWidth, setChartWidth] = useState(560);
-  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+  const chartInstanceRef = useRef<ReturnType<typeof echarts.init> | null>(null);
 
   const runningRef = useRef(false);
   const inflightRef = useRef(false);
@@ -69,19 +149,26 @@ function PingMonitorView({ onBack }: PingMonitorViewProps) {
   }, [normalizedTarget]);
 
   useEffect(() => {
-    const element = chartContainerRef.current;
-    if (!element) return;
-
-    const updateWidth = () => {
-      const width = element.clientWidth;
-      if (width > 0) setChartWidth(width);
+    const el = chartRef.current;
+    if (!el) return;
+    const chart = echarts.init(el);
+    chartInstanceRef.current = chart;
+    chart.setOption(buildPingChartOption(samples));
+    const resizeObserver = new ResizeObserver(() => chart.resize());
+    resizeObserver.observe(el);
+    return () => {
+      resizeObserver.disconnect();
+      chart.dispose();
+      chartInstanceRef.current = null;
     };
-
-    updateWidth();
-    const observer = new ResizeObserver(updateWidth);
-    observer.observe(element);
-    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const chart = chartInstanceRef.current;
+    if (!chart) return;
+    chart.setOption(buildPingChartOption(samples));
+  }, [samples]);
 
   const appendSample = (latency: number | null) => {
     counterRef.current += 1;
@@ -175,51 +262,6 @@ function PingMonitorView({ onBack }: PingMonitorViewProps) {
       jitter,
     };
   }, [samples]);
-
-  const chartYMax = useMemo(() => {
-    const candidate = stats.max === null ? 0 : stats.max * 1.2;
-    return Math.max(candidate, CHART_MIN_YMAX);
-  }, [stats.max]);
-
-  const chart = useMemo(() => {
-    const width = chartWidth;
-    const height = CHART_HEIGHT;
-    const padding = { top: 12, right: 8, bottom: 18, left: 38 };
-    const plotWidth = Math.max(0, width - padding.left - padding.right);
-    const plotHeight = Math.max(0, height - padding.top - padding.bottom);
-
-    if (!samples.length) {
-      return { width, height, padding, plotWidth, plotHeight, segments: [], gridLines: [] };
-    }
-
-    const denom = Math.max(1, samples.length - 1);
-    const pointX = (index: number) => padding.left + (index / denom) * plotWidth;
-    const pointY = (latency: number) =>
-      padding.top + plotHeight - (Math.min(latency, chartYMax) / chartYMax) * plotHeight;
-
-    const segments: { points: { x: number; y: number; index: number }[] }[] = [];
-    let current: { x: number; y: number; index: number }[] = [];
-    samples.forEach((sample, index) => {
-      if (sample.latency === null) {
-        if (current.length) {
-          segments.push({ points: current });
-          current = [];
-        }
-        return;
-      }
-      current.push({ x: pointX(index), y: pointY(sample.latency), index });
-    });
-    if (current.length) segments.push({ points: current });
-
-    const gridLineValues = [0, chartYMax / 2, chartYMax];
-    const gridLines = gridLineValues.map((value) => ({
-      y: padding.top + plotHeight - (value / chartYMax) * plotHeight,
-      label: Math.round(value),
-    }));
-
-    return { width, height, padding, plotWidth, plotHeight, segments, gridLines };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [samples, chartWidth, chartYMax]);
 
   const startMonitoring = () => {
     if (!normalizedTarget) {
@@ -348,77 +390,10 @@ function PingMonitorView({ onBack }: PingMonitorViewProps) {
               </span>
             </div>
           </div>
-          <div className="ping-chart-wrapper" ref={chartContainerRef}>
-            {!samples.length ? (
-              <div className="network-empty">点击“开始监控”后开始记录延迟数据</div>
-            ) : (
-              <svg
-                className="ping-chart"
-                width={chart.width}
-                height={chart.height}
-                preserveAspectRatio="none"
-              >
-                {chart.gridLines.map((line) => (
-                  <g key={`grid-${line.label}`}>
-                    <line
-                      x1={chart.padding.left}
-                      x2={chart.width - chart.padding.right}
-                      y1={line.y}
-                      y2={line.y}
-                      stroke="rgba(255,255,255,0.08)"
-                      strokeWidth={1}
-                    />
-                    <text
-                      x={chart.padding.left - 6}
-                      y={line.y + 3}
-                      textAnchor="end"
-                      className="ping-chart-label"
-                    >
-                      {line.label} ms
-                    </text>
-                  </g>
-                ))}
-                {chart.segments.map((segment, segmentIndex) => {
-                  if (segment.points.length === 0) return null;
-                  if (segment.points.length === 1) {
-                    const point = segment.points[0];
-                    return (
-                      <circle
-                        key={`seg-${segmentIndex}`}
-                        cx={point.x}
-                        cy={point.y}
-                        r={3}
-                        className="ping-chart-line"
-                      />
-                    );
-                  }
-                  const path = segment.points
-                    .map((point, index) => {
-                      const segmentStart = index === 0 ? "M" : "L";
-                      return `${segmentStart}${point.x.toFixed(1)},${point.y.toFixed(1)}`;
-                    })
-                    .join(" ");
-                  const last = segment.points[segment.points.length - 1];
-                  return (
-                    <g key={`seg-${segmentIndex}`}>
-                      <path
-                        d={path}
-                        fill="none"
-                        className="ping-chart-line"
-                        strokeWidth={2}
-                        strokeLinejoin="round"
-                        strokeLinecap="round"
-                      />
-                      <circle
-                        cx={last.x}
-                        cy={last.y}
-                        r={3.4}
-                        className="ping-chart-dot"
-                      />
-                    </g>
-                  );
-                })}
-              </svg>
+          <div className="ping-chart-wrapper">
+            <div className="ping-chart-canvas" ref={chartRef} />
+            {!samples.length && (
+              <div className="ping-chart-empty">点击“开始监控”后开始记录延迟数据</div>
             )}
           </div>
         </section>
