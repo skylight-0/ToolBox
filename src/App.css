@@ -7102,7 +7102,7 @@ body:has(.password-window-standalone) #root {
   inset: 0;
   width: 100vw;
   height: 100vh;
-  overflow: hidden;
+  overflow: visible;
   background: transparent;
   cursor: move;
   user-select: none;
@@ -7149,4 +7149,80 @@ body:has(.password-window-standalone) #root {
 
 .pin-menu button:hover {
   background: rgba(59, 130, 246, 0.85);
+}
+
+.pin-menu-window {
+  width: 100vw;
+  height: 100vh;
+  background: rgba(20, 22, 28, 0.95);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  gap: 2px;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+}
+
+.pin-menu-window button {
+  padding: 6px 12px;
+  font-size: 13px;
+  text-align: left;
+  color: #fff;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.pin-menu-window button:hover {
+  background: rgba(59, 130, 246, 0.85);
+}
+
+.test-window {
+  width: 100vw;
+  height: 100vh;
+  padding: 16px;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.test-window h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.test-window p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.test-result code {
+  background: #313244;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.test-delay strong {
+  color: #a6e3a1;
+  font-size: 18px;
+}
+
+.test-window button {
+  margin-top: auto;
+  padding: 6px 16px;
+  background: #89b4fa;
+  color: #1e1e2e;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  align-self: flex-start;
 }

@@ -3,14 +3,14 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
-import { imageDataUrlToImage, loadImage, type PinImageData } from "./screenshotModel";
+import { loadImage, type PinImageData } from "./screenshotModel";
 
 export default function PinWindow() {
   const pinWindow = getCurrentWebviewWindow();
   const [data, setData] = useState<PinImageData | null>(null);
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [scale, setScale] = useState(1);
   const baseSizeRef = useRef<{ w: number; h: number } | null>(null);
+  const lastClickRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,10 +35,15 @@ export default function PinWindow() {
 
   const startDrag = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    if (menu) {
-      setMenu(null);
+    // 手动判定双击：300ms 内连续两次左键按下则关闭，避免 startDrag 抢占双击事件
+    const now = Date.now();
+    if (now - lastClickRef.current < 300) {
+      lastClickRef.current = 0;
+      void invoke("close_pin_image", { label: pinWindow.label }).catch(console.error);
+      void pinWindow.close().catch(console.error);
       return;
     }
+    lastClickRef.current = now;
     void pinWindow.startDragging().catch(console.error);
   };
 
@@ -53,53 +58,19 @@ export default function PinWindow() {
       .catch(console.error);
   };
 
-  const onContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+  const onContextMenu = async (event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault();
-    setMenu({ x: event.clientX, y: event.clientY });
-  };
-
-  const close = async () => {
-    setMenu(null);
-    await invoke("close_pin_image", { label: pinWindow.label }).catch(console.error);
-    await pinWindow.close().catch(console.error);
-  };
-
-  const resetSize = () => {
-    setMenu(null);
-    const base = baseSizeRef.current;
-    if (!base) return;
-    setScale(1);
-    void pinWindow.setSize(new LogicalSize(base.w, base.h)).catch(console.error);
-  };
-
-  const copyImage = async () => {
-    setMenu(null);
-    if (!data) return;
-    try {
-      const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
-      const image = await imageDataUrlToImage(data.imageDataUrl);
-      await writeImage(image);
-      await image.close().catch(() => {});
-    } catch (error) {
-      console.error(error);
-    }
-  };
-
-  const saveImage = async () => {
-    setMenu(null);
-    if (!data) return;
-    try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const path = await save({
-        defaultPath: `pin-${Date.now()}.png`,
-        filters: [{ name: "PNG", extensions: ["png"] }],
-      });
-      if (path) {
-        await invoke("save_image_data", { path, dataUrl: data.imageDataUrl });
-      }
-    } catch (error) {
-      console.error(error);
-    }
+    // 用独立顶层菜单窗口，避免被钉图窗口物理边界裁剪
+    // event.clientX/Y 是窗口内逻辑坐标，需转屏幕物理坐标
+    const factor = await pinWindow.scaleFactor().catch(() => 1);
+    const pos = await pinWindow.outerPosition().catch(() => ({ x: 0, y: 0 }));
+    const screenX = Math.round(pos.x + event.clientX * factor);
+    const screenY = Math.round(pos.y + event.clientY * factor);
+    void invoke("show_pin_menu", {
+      sourceLabel: pinWindow.label,
+      x: screenX,
+      y: screenY,
+    }).catch(console.error);
   };
 
   return (
@@ -111,18 +82,6 @@ export default function PinWindow() {
     >
       {data && (
         <img className="pin-image" src={data.imageDataUrl} draggable={false} alt="" />
-      )}
-      {menu && (
-        <div
-          className="pin-menu"
-          style={{ left: menu.x, top: menu.y }}
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <button onClick={() => void copyImage()}>复制图片</button>
-          <button onClick={() => void saveImage()}>另存为</button>
-          <button onClick={resetSize}>重置大小</button>
-          <button onClick={() => void close()}>关闭</button>
-        </div>
       )}
     </div>
   );

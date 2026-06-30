@@ -14,11 +14,12 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 
-/// 将物理像素 RGBA 编码为 PNG 字节（快速压缩，优先速度而非体积）
+/// 将物理像素 RGBA 编码为 PNG 字节（无压缩，优先速度；本地传输不在乎体积）
 fn rgba_to_png_bytes(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     use image::ImageEncoder;
-    let mut buffer = Vec::with_capacity(rgba.len() / 2);
+    let mut buffer = Vec::with_capacity(rgba.len() + 1024);
+    // Fast 压缩 + Sub 过滤器：体积约 3MB 传输快，编码虽约 1s 但在后台线程不阻塞前端
     let encoder = PngEncoder::new_with_quality(&mut buffer, CompressionType::Fast, FilterType::Sub);
     encoder
         .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
@@ -95,6 +96,8 @@ pub(crate) struct AppState {
     pin_images: Mutex<HashMap<String, PinImageData>>,
     // 截图会话代际：每次启动/取消时递增，后台补抓线程据此判断是否应放弃写入
     screenshot_generation: Mutex<u64>,
+    // 钉图菜单待显示数据：show_pin_menu 时存入，菜单窗口 focus 后主动拉取
+    pending_pin_menu: Mutex<Option<PinMenuPayload>>,
 }
 
 const SCREENSHOT_SHORTCUT: &str = "Ctrl+Shift+A";
@@ -147,6 +150,13 @@ struct PinImageData {
     image_data_url: String,
     width: u32,
     height: u32,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PinMenuPayload {
+    source_label: String,
+    items: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2270,7 +2280,11 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
         .unwrap_or(0);
     let active_monitor = monitors[active_index].clone();
 
-    // 仅抓活动屏，抓完立即推送 overlay，不等其余屏
+    // 先把 overlay 挪到目标屏并显示（空背景），让窗口瞬间出现，抓屏编码在后台进行
+    show_overlay_on_monitor(&app, &active_monitor, None);
+    log::info!("[perf] overlay 已显示（空背景）");
+
+    // 抓屏 + PNG 编码全部在 spawn_blocking 后台线程完成，不阻塞主线程
     let need_wait = was_main_visible;
     let monitor_for_capture = active_monitor.clone();
     let active_capture = tauri::async_runtime::spawn_blocking(move || {
@@ -2283,25 +2297,28 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
             width: monitor_for_capture.width,
             height: monitor_for_capture.height,
         };
-        platform::screenshot::capture_screens(&[rect])
+        let captures = platform::screenshot::capture_screens(&[rect])?;
+        let capture = captures
+            .into_iter()
+            .next()
+            .ok_or_else(|| "活动屏抓取失败".to_string())?;
+        let png_bytes = rgba_to_png_bytes(
+            &capture.rgba,
+            capture.width as u32,
+            capture.height as u32,
+        )?;
+        Ok::<ScreenCapture, String>(ScreenCapture {
+            rgba: capture.rgba.clone(),
+            png_bytes,
+            width: capture.width as u32,
+            height: capture.height as u32,
+            scale_factor: monitor_for_capture.scale_factor,
+        })
     })
     .await
     .map_err(|error| format!("截图任务执行失败: {}", error))??;
-    let active_capture = active_capture
-        .into_iter()
-        .next()
-        .ok_or_else(|| "活动屏抓取失败".to_string())?;
-    let active_screen_capture = ScreenCapture {
-        rgba: active_capture.rgba.clone(),
-        png_bytes: rgba_to_png_bytes(
-            &active_capture.rgba,
-            active_capture.width as u32,
-            active_capture.height as u32,
-        )?,
-        width: active_capture.width as u32,
-        height: active_capture.height as u32,
-        scale_factor: active_monitor.scale_factor,
-    };
+    log::info!("[perf] 抓屏+PNG编码完成");
+    let active_screen_capture = active_capture;
 
     // 写入会话：活动屏 Some，其余 None（后台补抓）
     {
@@ -2327,8 +2344,11 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
         active_index,
         chrono_like_timestamp(),
     );
-    // 复用常驻 overlay：直接挪到目标屏并显示，省掉 WebView 冷启动
-    show_overlay_on_monitor(&app, &active_monitor, Some(payload));
+    // overlay 已提前显示，这里只推送 payload 触发前端渲染背景
+    log::info!("[perf] 推送 payload");
+    if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
+        let _ = overlay.emit("screenshot-payload", payload);
+    }
 
     // 后台抓取其余屏幕并补全会话，切屏时即可使用
     let other_monitors: Vec<(usize, MonitorInfo)> = monitors
@@ -2520,6 +2540,8 @@ async fn apply_screenshot_action(
     state: State<'_, AppState>,
     payload: ApplyScreenshotAction,
 ) -> Result<(), String> {
+    log::info!("[perf] apply_screenshot_action 开始 action={}", payload.action);
+    let action_start = std::time::Instant::now();
     use tauri_plugin_clipboard_manager::ClipboardExt;
     use tauri_plugin_dialog::{DialogExt, FilePath};
 
@@ -2557,6 +2579,7 @@ async fn apply_screenshot_action(
             app.clipboard()
                 .write_image(&image)
                 .map_err(|error| format!("写入剪贴板失败: {}", error))?;
+            log::info!("[perf] 复制完成 耗时={}ms", action_start.elapsed().as_millis());
         }
         "save" => {
             // 保存对话框需要前置焦点，先隐藏 always_on_top 的 overlay 避免遮挡
@@ -2651,6 +2674,132 @@ fn close_pin_image(label: String, state: State<'_, AppState>) -> Result<(), Stri
         .lock()
         .map_err(|error| format!("锁定钉图数据失败: {}", error))?;
     pins.remove(&label);
+    Ok(())
+}
+
+/// 弹出钉图右键菜单（独立顶层窗口，不受钉图窗口边界裁剪）
+#[tauri::command]
+fn show_pin_menu(app: tauri::AppHandle, source_label: String, x: i32, y: i32) -> Result<(), String> {
+    let menu_window = app
+        .get_webview_window("pin-menu")
+        .ok_or_else(|| "菜单窗口未找到".to_string())?;
+    // 菜单尺寸约 128x140（物理像素），靠近屏幕右/下边缘时翻转
+    let menu_w = 132;
+    let menu_h = 164;
+    let (pos_x, pos_y) = if let Ok(Some(monitor)) = app.monitor_from_point(x as f64, y as f64) {
+        let size = monitor.size();
+        let mpos = monitor.position();
+        let phys_w = size.width as i32;
+        let phys_h = size.height as i32;
+        let mx = if x + menu_w > mpos.x + phys_w { x - menu_w } else { x };
+        let my = if y + menu_h > mpos.y + phys_h { y - menu_h } else { y };
+        (mx.max(mpos.x), my.max(mpos.y))
+    } else {
+        (x, y)
+    };
+    let _ = menu_window.set_position(Position::Physical(PhysicalPosition::new(pos_x, pos_y)));
+    let _ = menu_window.set_size(Size::Physical(PhysicalSize::new(menu_w as u32, menu_h as u32)));
+    // 先存入 pending，菜单窗口 focus 后主动拉取，避免 emit 时序问题
+    {
+        let state: State<'_, AppState> = app.state();
+        let pending_guard = state.pending_pin_menu.lock();
+        if let Ok(mut pending) = pending_guard {
+            *pending = Some(PinMenuPayload {
+                source_label,
+                items: vec![
+                    "复制图片".to_string(),
+                    "另存为".to_string(),
+                    "重置大小".to_string(),
+                    "关闭".to_string(),
+                ],
+            });
+        }
+    }
+    let _ = menu_window.show();
+    let _ = menu_window.set_focus();
+    Ok(())
+}
+
+/// 菜单窗口 focus 后主动拉取待显示数据
+#[tauri::command]
+fn get_pending_pin_menu(state: State<'_, AppState>) -> Result<Option<PinMenuPayload>, String> {
+    let mut pending = state
+        .pending_pin_menu
+        .lock()
+        .map_err(|error| format!("锁定菜单数据失败: {}", error))?;
+    Ok(pending.take())
+}
+
+/// 菜单窗口点击后执行对应动作，然后隐藏菜单窗口
+#[tauri::command]
+async fn pin_menu_action(app: tauri::AppHandle, state: State<'_, AppState>, source_label: String, action: String) -> Result<(), String> {
+    // 先隐藏菜单窗口
+    if let Some(menu_window) = app.get_webview_window("pin-menu") {
+        let _ = menu_window.hide();
+    }
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    use tauri_plugin_dialog::{DialogExt, FilePath};
+    let (data_url, logical_w, logical_h) = {
+        let pins = state
+            .pin_images
+            .lock()
+            .map_err(|error| format!("锁定钉图数据失败: {}", error))?;
+        let pin = pins
+            .get(&source_label)
+            .ok_or_else(|| "钉图数据不存在".to_string())?;
+        (pin.image_data_url.clone(), pin.width, pin.height)
+    };
+    match action.as_str() {
+        "复制图片" => {
+            let bytes = decode_data_url(&data_url)?;
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("解码图片失败: {}", e))?
+                .to_rgba8();
+            let (w, h) = img.dimensions();
+            let image = tauri::image::Image::new_owned(img.into_raw(), w, h);
+            app.clipboard()
+                .write_image(&image)
+                .map_err(|error| format!("写入剪贴板失败: {}", error))?;
+        }
+        "另存为" => {
+            let app_for_dialog = app.clone();
+            let chosen = tauri::async_runtime::spawn_blocking(move || {
+                app_for_dialog
+                    .dialog()
+                    .file()
+                    .add_filter("PNG", &["png"])
+                    .set_file_name(&format!("pin-{}.png", chrono_like_timestamp()))
+                    .blocking_save_file()
+            })
+            .await
+            .map_err(|error| format!("保存对话框任务失败: {}", error))?;
+            let path = match chosen {
+                Some(FilePath::Path(path)) => path,
+                Some(_) => return Err("不支持的保存路径".to_string()),
+                None => return Ok(()),
+            };
+            let bytes = decode_data_url(&data_url)?;
+            fs::write(&path, bytes).map_err(|error| format!("保存图片失败: {}", error))?;
+        }
+        "重置大小" => {
+            if let Some(win) = app.get_webview_window(&source_label) {
+                let _ = win.set_size(Size::Logical(LogicalSize::new(logical_w as f64, logical_h as f64)));
+            }
+        }
+        "关闭" => {
+            {
+                let mut pins = state
+                    .pin_images
+                    .lock()
+                    .map_err(|error| format!("锁定钉图数据失败: {}", error))?;
+                pins.remove(&source_label);
+            }
+            if let Some(win) = app.get_webview_window(&source_label) {
+                let _ = win.close();
+            }
+        }
+        other => return Err(format!("未知菜单动作: {}", other)),
+    }
     Ok(())
 }
 
@@ -2766,6 +2915,10 @@ pub fn run() {
                     let state: State<'_, AppState> = window.state();
                     request_hide_sidebar(window, &state);
                 }
+                // 钉图菜单窗口失焦自动隐藏
+                if !focused && window.label() == "pin-menu" {
+                    let _ = window.hide();
+                }
             }
             tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
                 if window.label() == "screenshot-overlay" {
@@ -2798,13 +2951,32 @@ pub fn run() {
                     if event.state == ShortcutState::Pressed
                         && shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyA)
                     {
-                        log::info!("全局快捷键 Ctrl+Shift+A 已触发截图");
+                        log::info!("[perf] 快捷键触发 t=0");
                         let app_handle = app.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(error) = start_screenshot_internal(app_handle).await {
                                 log::error!("截图启动失败: {}", error);
                             }
                         });
+                    }
+                    if event.state == ShortcutState::Pressed
+                        && shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyT)
+                    {
+                        // 测试窗口：记录按下时的系统时间戳，前端显示后对比
+                        let pressed_at = chrono_like_timestamp();
+                        log::info!("[test] Ctrl+Shift+T 按下 t={}", pressed_at);
+                        if let Some(test_window) = app.get_webview_window("test-window") {
+                            let visible = test_window.is_visible().unwrap_or(false);
+                            if visible {
+                                let _ = test_window.hide();
+                                log::info!("[test] 测试窗口隐藏");
+                            } else {
+                                let _ = test_window.emit("test-show", pressed_at);
+                                let _ = test_window.show();
+                                let _ = test_window.set_focus();
+                                log::info!("[test] 测试窗口 show 调用完成");
+                            }
+                        }
                     }
                 })
                 .build(),
@@ -2855,6 +3027,9 @@ pub fn run() {
             apply_screenshot_action,
             get_pin_image,
             close_pin_image,
+            show_pin_menu,
+            pin_menu_action,
+            get_pending_pin_menu,
             get_screenshot_shortcut_enabled,
             set_screenshot_shortcut_enabled
         ])
@@ -2876,6 +3051,7 @@ pub fn run() {
                 screenshot_session: Mutex::new(None),
                 pin_images: Mutex::new(HashMap::new()),
                 screenshot_generation: Mutex::new(0),
+                pending_pin_menu: Mutex::new(None),
             });
 
             // 注册 Alt+Space 全局快捷键
@@ -2924,6 +3100,11 @@ pub fn run() {
                 }
             }
 
+            // 注册测试快捷键 Ctrl+Shift+T
+            if let Err(error) = app.global_shortcut().register("Ctrl+Shift+T") {
+                log::error!("注册测试快捷键失败: {}", error);
+            }
+
             // 初始隐藏窗口
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
@@ -2953,7 +3134,51 @@ pub fn run() {
                 let _ = overlay.hide();
             }
 
-            // ===== 添加系统托盘 =====
+            // 预创建钉图右键菜单窗口（隐藏），右键时复用，避免 WebView 冷启动
+            if app.get_webview_window("pin-menu").is_none() {
+                let menu_window = WebviewWindowBuilder::new(
+                    app,
+                    "pin-menu",
+                    WebviewUrl::App("/#pin-menu".into()),
+                )
+                .title("")
+                .inner_size(132.0, 164.0)
+                .position(0.0, 0.0)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .shadow(false)
+                .focused(false)
+                .visible(false)
+                .build()
+                .map_err(|error| format!("预创建钉图菜单窗口失败: {}", error))?;
+                let _ = menu_window.hide();
+            }
+
+            // 预创建测试窗口（隐藏），Ctrl+Shift+T 唤出用于测量延迟
+            if app.get_webview_window("test-window").is_none() {
+                let test_window = WebviewWindowBuilder::new(
+                    app,
+                    "test-window",
+                    WebviewUrl::App("/#test".into()),
+                )
+                .title("测试窗口")
+                .inner_size(300.0, 200.0)
+                .position(100.0, 100.0)
+                .decorations(true)
+                .transparent(false)
+                .always_on_top(true)
+                .skip_taskbar(false)
+                .resizable(false)
+                .shadow(true)
+                .focused(true)
+                .visible(false)
+                .build()
+                .map_err(|error| format!("预创建测试窗口失败: {}", error))?;
+                let _ = test_window.hide();
+            }
             use tauri_plugin_autostart::ManagerExt;
 
             // 获取开机自启状态

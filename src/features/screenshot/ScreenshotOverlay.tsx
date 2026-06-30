@@ -30,6 +30,8 @@ export default function ScreenshotOverlay() {
   }, []);
 
   const applyPayload = useCallback(async (data: ActiveScreenshotPayload) => {
+    const t0 = performance.now();
+    console.log(`[perf] 收到 payload frameId=${data.frameId}`);
     payloadRef.current = data;
     setPayload(data);
     commitRect(null);
@@ -40,17 +42,21 @@ export default function ScreenshotOverlay() {
     // 用 createImageBitmap 在 worker 线程解码 PNG，再 drawImage 到 canvas，
     // 避免 putImageData 的主线程大块内存分配导致 GC 卡顿
     try {
+      const tFetch = performance.now();
       const response = await fetch(
         `http://screenshot-frame.localhost/active?v=${data.frameId}`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const blob = await response.blob();
+      console.log(`[perf] fetch+blob 完成 耗时=${(performance.now() - tFetch).toFixed(1)}ms`);
       // 先释放上一张 bitmap 再创建新的，避免多张同时驻留
       if (bitmapRef.current) {
         bitmapRef.current.close();
         bitmapRef.current = null;
       }
+      const tBitmap = performance.now();
       const bitmap = await createImageBitmap(blob);
+      console.log(`[perf] createImageBitmap 完成 耗时=${(performance.now() - tBitmap).toFixed(1)}ms`);
       bitmapRef.current = bitmap;
       const canvas = canvasRef.current;
       if (canvas) {
@@ -60,6 +66,7 @@ export default function ScreenshotOverlay() {
         if (ctx) ctx.drawImage(bitmap, 0, 0);
       }
       setImageReady(true);
+      console.log(`[perf] 背景渲染就绪 总耗时=${(performance.now() - t0).toFixed(1)}ms`);
     } catch (loadError) {
       setError(`加载截图失败: ${String(loadError)}`);
     }
@@ -136,7 +143,10 @@ export default function ScreenshotOverlay() {
       if (!activeRect || !activePayload) return;
       busyRef.current = true;
       setBusy(true);
+      const tFinish = performance.now();
+      console.log(`[perf] 点击${action} 按下`);
       try {
+        const tInvoke = performance.now();
         await invoke("apply_screenshot_action", {
           payload: {
             action,
@@ -148,9 +158,11 @@ export default function ScreenshotOverlay() {
             },
           },
         });
+        console.log(`[perf] invoke 完成 耗时=${(performance.now() - tInvoke).toFixed(1)}ms`);
         // save 动作由 Rust 端自行隐藏 overlay 弹对话框，
-        // 无论成功/取消都需关闭会话；其余动作正常关闭
-        await cancel();
+        // 无论成功/取消都需关闭会话；其余动作 fire-and-forget 关闭，减少 IPC 往返等待
+        void cancel();
+        console.log(`[perf] ${action} 全流程完成 总耗时=${(performance.now() - tFinish).toFixed(1)}ms`);
       } catch (actionError) {
         setError(String(actionError));
         busyRef.current = false;
