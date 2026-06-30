@@ -2521,6 +2521,10 @@ async fn apply_screenshot_action(
                 .map_err(|error| format!("写入剪贴板失败: {}", error))?;
         }
         "save" => {
+            // 保存对话框需要前置焦点，先隐藏 always_on_top 的 overlay 避免遮挡
+            if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
+                let _ = overlay.hide();
+            }
             let app_for_dialog = app.clone();
             let chosen = tauri::async_runtime::spawn_blocking(move || {
                 app_for_dialog

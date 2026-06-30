@@ -143,6 +143,8 @@ export default function ScreenshotOverlay() {
             },
           },
         });
+        // save 动作由 Rust 端自行隐藏 overlay 弹对话框，
+        // 无论成功/取消都需关闭会话；其余动作正常关闭
         await cancel();
       } catch (actionError) {
         setError(String(actionError));
@@ -234,6 +236,10 @@ export default function ScreenshotOverlay() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        void cancel();
+      }}
     >
       <canvas ref={canvasRef} className="screenshot-bg" />
 
