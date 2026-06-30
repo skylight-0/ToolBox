@@ -93,6 +93,8 @@ pub(crate) struct AppState {
     clipboard_db_path: PathBuf,
     screenshot_session: Mutex<Option<ScreenshotSession>>,
     pin_images: Mutex<HashMap<String, PinImageData>>,
+    // 截图会话代际：每次启动/取消时递增，后台补抓线程据此判断是否应放弃写入
+    screenshot_generation: Mutex<u64>,
 }
 
 const SCREENSHOT_SHORTCUT: &str = "Ctrl+Shift+A";
@@ -109,8 +111,10 @@ struct MonitorInfo {
 
 #[derive(Clone)]
 struct ScreenCapture {
-    // 物理像素 RGBA 字节，行序自顶向下；选区裁剪与 overlay 背景均直接使用
+    // 物理像素 RGBA 字节，行序自顶向下；选区裁剪使用
     rgba: Vec<u8>,
+    // 预编码 PNG 字节，供 overlay 背景通过自定义协议直接返回
+    png_bytes: Vec<u8>,
     width: u32,
     height: u32,
     scale_factor: f64,
@@ -2201,6 +2205,14 @@ fn build_active_payload(
 
 async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> {
     // 重入保护：若截图会话仍在进行且窗口已可见，则仅聚焦，不重复抓屏
+    // 同时递增代际，使上一轮仍在跑的后台补抓线程放弃写入
+    {
+        let state: State<'_, AppState> = app.state();
+        let gen_guard = state.screenshot_generation.lock();
+        if let Ok(mut gen) = gen_guard {
+            *gen = gen.wrapping_add(1);
+        }
+    }
     let already_active = app
         .get_webview_window("screenshot-overlay")
         .and_then(|w| w.is_visible().ok())
@@ -2281,6 +2293,11 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
         .ok_or_else(|| "活动屏抓取失败".to_string())?;
     let active_screen_capture = ScreenCapture {
         rgba: active_capture.rgba.clone(),
+        png_bytes: rgba_to_png_bytes(
+            &active_capture.rgba,
+            active_capture.width as u32,
+            active_capture.height as u32,
+        )?,
         width: active_capture.width as u32,
         height: active_capture.height as u32,
         scale_factor: active_monitor.scale_factor,
@@ -2323,6 +2340,12 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
     if !other_monitors.is_empty() {
         let app_clone = app.clone();
         let monitors_for_bg = other_monitors.clone();
+        // 记录当前代际，补抓完成后校验，若已被新会话/取消取代则放弃写入
+        let generation = {
+            let state: State<'_, AppState> = app.state();
+            let gen = state.screenshot_generation.lock().map_err(|e| format!("{}", e))?;
+            *gen
+        };
         tauri::async_runtime::spawn(async move {
             let result = tauri::async_runtime::spawn_blocking(move || {
                 let rects: Vec<platform::screenshot::MonitorRect> = monitors_for_bg
@@ -2339,6 +2362,15 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
             .await;
             if let Ok(Ok(captures)) = result {
                 let state: State<'_, AppState> = app_clone.state();
+                // 先校验代际，过期则直接丢弃抓取结果，避免写入新会话
+                let gen_ok = state
+                    .screenshot_generation
+                    .lock()
+                    .map(|g| *g == generation)
+                    .unwrap_or(false);
+                if !gen_ok {
+                    return;
+                }
                 let session_lock = state.screenshot_session.lock();
                 if let Ok(mut session_lock) = session_lock {
                     if let Some(session) = session_lock.as_mut() {
@@ -2346,8 +2378,15 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
                             other_monitors.iter().enumerate()
                         {
                             if let Some(capture) = captures.get(capture_idx) {
+                                let png_bytes = rgba_to_png_bytes(
+                                    &capture.rgba,
+                                    capture.width as u32,
+                                    capture.height as u32,
+                                )
+                                .unwrap_or_default();
                                 session.captures[*monitor_idx] = Some(ScreenCapture {
                                     rgba: capture.rgba.clone(),
+                                    png_bytes,
                                     width: capture.width as u32,
                                     height: capture.height as u32,
                                     scale_factor: monitor_info.scale_factor,
@@ -2458,6 +2497,11 @@ fn cancel_screenshot(app: tauri::AppHandle, state: State<'_, AppState>) -> Resul
             .screenshot_session
             .lock()
             .map_err(|error| format!("锁定截图会话失败: {}", error))?;
+        // 递增代际，使仍在跑的后台补抓线程放弃写入
+        let gen_guard = state.screenshot_generation.lock();
+        if let Ok(mut gen) = gen_guard {
+            *gen = gen.wrapping_add(1);
+        }
         session
             .take()
             .map(|session| session.was_main_visible)
@@ -2479,7 +2523,8 @@ async fn apply_screenshot_action(
     use tauri_plugin_clipboard_manager::ClipboardExt;
     use tauri_plugin_dialog::{DialogExt, FilePath};
 
-    let (rgba, full_w, full_h, scale_factor, active) = {
+    // 在锁内完成裁剪，避免把全屏 RGBA clone 到锁外造成大块临时内存
+    let (cropped, cropped_w, cropped_h, cropped_x, cropped_y, active, scale_factor) = {
         let session = state
             .screenshot_session
             .lock()
@@ -2491,27 +2536,20 @@ async fn apply_screenshot_action(
             .as_ref()
             .ok_or_else(|| "活动屏抓取尚未就绪".to_string())?;
         let active = session.monitors[session.active_index].clone();
-        (
-            capture.rgba.clone(),
-            capture.width,
-            capture.height,
-            capture.scale_factor,
-            active,
-        )
+        let scale_factor = capture.scale_factor;
+        let physical_rect = CropRect {
+            x: payload.rect.x * scale_factor,
+            y: payload.rect.y * scale_factor,
+            w: payload.rect.w * scale_factor,
+            h: payload.rect.h * scale_factor,
+        };
+        let cropped = crop_rgba(&capture.rgba, capture.width, capture.height, physical_rect)?;
+        let cropped_w = (physical_rect.w.max(0.0).round()) as u32;
+        let cropped_h = (physical_rect.h.max(0.0).round()) as u32;
+        let cropped_x = (physical_rect.x.round()) as i32;
+        let cropped_y = (physical_rect.y.round()) as i32;
+        (cropped, cropped_w, cropped_h, cropped_x, cropped_y, active, scale_factor)
     };
-
-    // 逻辑坐标 -> 物理像素，向下取整并做边界裁剪
-    let physical_rect = CropRect {
-        x: payload.rect.x * scale_factor,
-        y: payload.rect.y * scale_factor,
-        w: payload.rect.w * scale_factor,
-        h: payload.rect.h * scale_factor,
-    };
-    let cropped = crop_rgba(&rgba, full_w, full_h, physical_rect)?;
-    let cropped_w = (physical_rect.w.max(0.0).round()) as u32;
-    let cropped_h = (physical_rect.h.max(0.0).round()) as u32;
-    let cropped_x = (physical_rect.x.round()) as i32;
-    let cropped_y = (physical_rect.y.round()) as i32;
 
     match payload.action.as_str() {
         "copy" => {
@@ -2689,8 +2727,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .register_uri_scheme_protocol("screenshot-frame", |ctx, request| {
-            // 直接返回当前活动屏的原始 RGBA 字节，前端用 Canvas putImageData 绘制，
-            // 完全绕开 PNG 编/解码与 base64，是最快的传输方式
+            // 返回当前活动屏的预编码 PNG 字节，前端用 createImageBitmap 在
+            // worker 线程解码，避免 putImageData 的主线程 GC 压力
             let app = ctx.app_handle();
             let state: State<'_, AppState> = app.state();
             let body = state
@@ -2701,11 +2739,10 @@ pub fn run() {
                     session.as_ref().and_then(|s| {
                         s.captures
                             .get(s.active_index)
-                            .and_then(|c| c.as_ref().map(|c| c.rgba.clone()))
+                            .and_then(|c| c.as_ref().map(|c| c.png_bytes.clone()))
                     })
                 })
                 .unwrap_or_default();
-            // 处理 CORS 预检请求，overlay 页面与协议不同源，否则 fetch 会失败
             if request.method() == "OPTIONS" {
                 return tauri::http::Response::builder()
                     .header("access-control-allow-origin", "*")
@@ -2716,7 +2753,7 @@ pub fn run() {
                     .unwrap();
             }
             tauri::http::Response::builder()
-                .header("content-type", "application/octet-stream")
+                .header("content-type", "image/png")
                 .header("cache-control", "no-store")
                 .header("access-control-allow-origin", "*")
                 .body(body)
@@ -2838,6 +2875,7 @@ pub fn run() {
                 clipboard_db_path,
                 screenshot_session: Mutex::new(None),
                 pin_images: Mutex::new(HashMap::new()),
+                screenshot_generation: Mutex::new(0),
             });
 
             // 注册 Alt+Space 全局快捷键

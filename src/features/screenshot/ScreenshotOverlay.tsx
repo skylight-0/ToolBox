@@ -22,6 +22,7 @@ export default function ScreenshotOverlay() {
   const payloadRef = useRef<ActiveScreenshotPayload | null>(null);
   const busyRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bitmapRef = useRef<ImageBitmap | null>(null);
 
   const commitRect = useCallback((next: CropRect | null) => {
     rectRef.current = next;
@@ -36,27 +37,27 @@ export default function ScreenshotOverlay() {
     // 每次收到新截图时重置 busy，避免上一次操作遗留的 busy 状态导致按钮禁用
     busyRef.current = false;
     setBusy(false);
-    // 直接从自定义协议拉取原始 RGBA 字节，用 Canvas putImageData 绘制，
-    // 完全绕开 PNG 编/解码，是最快的背景渲染方式
+    // 用 createImageBitmap 在 worker 线程解码 PNG，再 drawImage 到 canvas，
+    // 避免 putImageData 的主线程大块内存分配导致 GC 卡顿
     try {
       const response = await fetch(
         `http://screenshot-frame.localhost/active?v=${data.frameId}`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const buffer = await response.arrayBuffer();
-      const rgba = new Uint8ClampedArray(buffer);
+      const blob = await response.blob();
+      // 先释放上一张 bitmap 再创建新的，避免多张同时驻留
+      if (bitmapRef.current) {
+        bitmapRef.current.close();
+        bitmapRef.current = null;
+      }
+      const bitmap = await createImageBitmap(blob);
+      bitmapRef.current = bitmap;
       const canvas = canvasRef.current;
       if (canvas) {
-        canvas.width = data.physicalWidth;
-        canvas.height = data.physicalHeight;
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
         const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.putImageData(
-            new ImageData(rgba, data.physicalWidth, data.physicalHeight),
-            0,
-            0,
-          );
-        }
+        if (ctx) ctx.drawImage(bitmap, 0, 0);
       }
       setImageReady(true);
     } catch (loadError) {
@@ -86,6 +87,10 @@ export default function ScreenshotOverlay() {
           rectRef.current = null;
           payloadRef.current = null;
           busyRef.current = false;
+          if (bitmapRef.current) {
+            bitmapRef.current.close();
+            bitmapRef.current = null;
+          }
         }),
       ]);
       unlistenPayload = unsubscribePayload;
