@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import * as QRCode from "qrcode";
+import { Image as TauriImage } from "@tauri-apps/api/image";
 import SubViewHeader from "../../components/SubViewHeader";
 
 type QrCodeViewProps = {
@@ -33,16 +34,25 @@ function withAlpha(hexColor: string) {
   return hexColor;
 }
 
-function dataUrlToBytes(dataUrl: string) {
-  const base64Data = dataUrl.split(",")[1] || "";
-  const binaryString = atob(base64Data);
-  const bytes = new Uint8Array(binaryString.length);
-
-  for (let index = 0; index < binaryString.length; index += 1) {
-    bytes[index] = binaryString.charCodeAt(index);
-  }
-
-  return bytes;
+async function dataUrlToQrImage(dataUrl: string): Promise<TauriImage> {
+  const htmlImage = new Image();
+  await new Promise<void>((resolve, reject) => {
+    htmlImage.onload = () => resolve();
+    htmlImage.onerror = () => reject(new Error("图片加载失败"));
+    htmlImage.src = dataUrl;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = htmlImage.naturalWidth || htmlImage.width;
+  canvas.height = htmlImage.naturalHeight || htmlImage.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("无法创建 Canvas 上下文");
+  context.drawImage(htmlImage, 0, 0);
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  return TauriImage.new(
+    new Uint8Array(imageData.data.buffer),
+    canvas.width,
+    canvas.height,
+  );
 }
 
 function QrCodeView({ onBack }: QrCodeViewProps) {
@@ -118,7 +128,9 @@ function QrCodeView({ onBack }: QrCodeViewProps) {
 
     try {
       const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
-      await writeImage(dataUrlToBytes(qrDataUrl));
+      const image = await dataUrlToQrImage(qrDataUrl);
+      await writeImage(image);
+      await image.close().catch(() => {});
       setMessage("已复制二维码图片");
       setError("");
     } catch (clipboardError) {

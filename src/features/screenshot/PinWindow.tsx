@@ -3,7 +3,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent, WheelEvent as ReactWheelEvent } from "react";
-import { dataUrlToBytes, loadImage, type PinImageData } from "./screenshotModel";
+import { imageDataUrlToImage, loadImage, type PinImageData } from "./screenshotModel";
 
 export default function PinWindow() {
   const pinWindow = getCurrentWebviewWindow();
@@ -77,7 +77,9 @@ export default function PinWindow() {
     if (!data) return;
     try {
       const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
-      await writeImage(dataUrlToBytes(data.imageDataUrl));
+      const image = await imageDataUrlToImage(data.imageDataUrl);
+      await writeImage(image);
+      await image.close().catch(() => {});
     } catch (error) {
       console.error(error);
     }

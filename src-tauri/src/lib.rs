@@ -2161,9 +2161,12 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
     let _ = window.hide();
 
     let monitors_for_capture = monitors.clone();
+    let need_wait = was_main_visible;
     let captures = tauri::async_runtime::spawn_blocking(move || {
-        // 等待侧边栏真正隐藏后再截图，避免把侧边栏本身拍进去
-        std::thread::sleep(Duration::from_millis(120));
+        // 仅在侧边栏原本可见时等待其隐藏，避免把侧边栏拍进截图
+        if need_wait {
+            std::thread::sleep(Duration::from_millis(80));
+        }
         let monitor_rects: Vec<platform::screenshot::MonitorRect> = monitors_for_capture
             .iter()
             .map(|monitor| platform::screenshot::MonitorRect {
@@ -2478,6 +2481,23 @@ fn set_screenshot_shortcut_enabled(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .clear_targets()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                ])
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Debug
+                } else {
+                    log::LevelFilter::Info
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -2516,17 +2536,17 @@ pub fn run() {
                     if event.state == ShortcutState::Pressed
                         && shortcut.matches(Modifiers::ALT, Code::Space)
                     {
-                        eprintln!("全局快捷键 Alt+Space 已触发");
+                        log::info!("全局快捷键 Alt+Space 已触发");
                         toggle_sidebar_window(app);
                     }
                     if event.state == ShortcutState::Pressed
                         && shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyA)
                     {
-                        eprintln!("全局快捷键 Ctrl+Shift+A 已触发截图");
+                        log::info!("全局快捷键 Ctrl+Shift+A 已触发截图");
                         let app_handle = app.clone();
                         tauri::async_runtime::spawn(async move {
                             if let Err(error) = start_screenshot_internal(app_handle).await {
-                                eprintln!("截图启动失败: {}", error);
+                                log::error!("截图启动失败: {}", error);
                             }
                         });
                     }
@@ -2604,7 +2624,7 @@ pub fn run() {
             // 注册 Alt+Space 全局快捷键
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
             if let Err(error) = app.global_shortcut().register("Alt+Space") {
-                eprintln!("注册全局快捷键 Alt+Space 失败: {}", error);
+                log::error!("注册全局快捷键 Alt+Space 失败: {}", error);
                 let state: State<'_, AppState> = app.state();
                 if let Ok(connection) = open_clipboard_db(&state) {
                     let input = AppNotificationInput {
@@ -2643,7 +2663,7 @@ pub fn run() {
             };
             if screenshot_shortcut_enabled {
                 if let Err(error) = app.global_shortcut().register(SCREENSHOT_SHORTCUT) {
-                    eprintln!("注册截图快捷键 {} 失败: {}", SCREENSHOT_SHORTCUT, error);
+                    log::error!("注册截图快捷键 {} 失败: {}", SCREENSHOT_SHORTCUT, error);
                 }
             }
 

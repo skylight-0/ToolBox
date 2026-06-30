@@ -36,7 +36,7 @@ pub fn capture_screens(monitors: &[MonitorRect]) -> Result<Vec<CaptureOutput>, S
                     height: monitor.height,
                 }),
                 Err(error) => {
-                    eprintln!("捕获屏幕 ({},{}) 失败: {}", monitor.x, monitor.y, error);
+                    log::error!("捕获屏幕 ({},{}) 失败: {}", monitor.x, monitor.y, error);
                 }
             }
         }

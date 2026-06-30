@@ -3,8 +3,8 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import {
+  cropToClipboardImage,
   cropToDataUrl,
-  dataUrlToBytes,
   loadImage,
   normalizeRect,
   type ActiveScreenshotPayload,
@@ -17,21 +17,31 @@ export default function ScreenshotOverlay() {
   const [error, setError] = useState("");
   const [rect, setRect] = useState<CropRect | null>(null);
   const [busy, setBusy] = useState(false);
+  const [imageReady, setImageReady] = useState(false);
+  const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const drawingRef = useRef<{ x: number; y: number } | null>(null);
-  const imageElRef = useRef<HTMLImageElement | null>(null);
   const sourceImageRef = useRef<HTMLImageElement | null>(null);
-  const shownRef = useRef(false);
+  const rectRef = useRef<CropRect | null>(null);
+  const payloadRef = useRef<ActiveScreenshotPayload | null>(null);
   const busyRef = useRef(false);
 
+  const commitRect = useCallback((next: CropRect | null) => {
+    rectRef.current = next;
+    setRect(next);
+  }, []);
+
   useEffect(() => {
+    overlayWindow.show().catch(console.error);
     let cancelled = false;
     invoke<ActiveScreenshotPayload>("get_active_screenshot")
       .then(async (data) => {
         if (cancelled) return;
+        payloadRef.current = data;
         setPayload(data);
         const image = await loadImage(data.imageDataUrl);
         if (cancelled) return;
         sourceImageRef.current = image;
+        setImageReady(true);
       })
       .catch((invokeError) => {
         if (!cancelled) setError(String(invokeError));
@@ -39,13 +49,8 @@ export default function ScreenshotOverlay() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const showOverlay = useCallback(() => {
-    if (shownRef.current) return;
-    shownRef.current = true;
-    overlayWindow.show().catch(console.error);
-  }, [overlayWindow]);
 
   const cancel = useCallback(async () => {
     await invoke("cancel_screenshot").catch(console.error);
@@ -56,13 +61,17 @@ export default function ScreenshotOverlay() {
       if (busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
-      setRect(null);
+      setImageReady(false);
+      commitRect(null);
       try {
         const next = await invoke<ActiveScreenshotPayload>("switch_screenshot_monitor", {
           direction,
         });
+        payloadRef.current = next;
         setPayload(next);
-        sourceImageRef.current = await loadImage(next.imageDataUrl);
+        const image = await loadImage(next.imageDataUrl);
+        sourceImageRef.current = image;
+        setImageReady(true);
       } catch (switchError) {
         setError(String(switchError));
       } finally {
@@ -70,79 +79,40 @@ export default function ScreenshotOverlay() {
         setBusy(false);
       }
     },
-    [],
+    [commitRect],
   );
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        void cancel();
-      } else if (event.key === "Enter") {
-        void confirmCopy();
-      } else if (event.key === "ArrowLeft") {
-        void switchMonitor(-1);
-      } else if (event.key === "ArrowRight") {
-        void switchMonitor(1);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cancel, switchMonitor, rect, payload]);
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    drawingRef.current = { x: event.clientX, y: event.clientY };
-    setRect({ x: event.clientX, y: event.clientY, w: 0, h: 0 });
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-  };
-
-  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const start = drawingRef.current;
-    if (!start) return;
-    setRect(normalizeRect(start.x, start.y, event.clientX, event.clientY));
-  };
-
-  const onPointerUp = () => {
-    if (!drawingRef.current) return;
-    drawingRef.current = null;
-    setRect((current) => {
-      if (current && (current.w < 4 || current.h < 4)) return null;
-      return current;
-    });
-  };
 
   const finish = useCallback(
     async (action: "copy" | "save" | "pin") => {
       if (busyRef.current) return;
-      const activeRect = rect;
+      const activeRect = rectRef.current;
       const source = sourceImageRef.current;
-      const activePayload = payload;
-      if (!activeRect || !source || !activePayload) {
-        return;
-      }
+      const activePayload = payloadRef.current;
+      if (!activeRect || !source || !activePayload) return;
       busyRef.current = true;
       setBusy(true);
       try {
-        const dataUrl = await cropToDataUrl(source, activePayload.scaleFactor, activeRect);
         if (action === "copy") {
           const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
-          await writeImage(dataUrlToBytes(dataUrl));
+          const image = await cropToClipboardImage(source, activePayload.scaleFactor, activeRect);
+          await writeImage(image);
+          await image.close().catch(() => {});
         } else if (action === "save") {
           const { save } = await import("@tauri-apps/plugin-dialog");
           const path = await save({
             defaultPath: `screenshot-${Date.now()}.png`,
             filters: [{ name: "PNG", extensions: ["png"] }],
           });
-          if (path) {
-            await invoke("save_image_data", { path, dataUrl });
-          } else {
+          if (!path) {
             busyRef.current = false;
             setBusy(false);
             return;
           }
+          const dataUrl = await cropToDataUrl(source, activePayload.scaleFactor, activeRect);
+          await invoke("save_image_data", { path, dataUrl });
         } else {
           const sf = activePayload.scaleFactor;
+          const dataUrl = await cropToDataUrl(source, activePayload.scaleFactor, activeRect);
           await invoke("create_pin_window", {
             imageDataUrl: dataUrl,
             cropX: Math.round(activeRect.x * sf),
@@ -158,10 +128,49 @@ export default function ScreenshotOverlay() {
         setBusy(false);
       }
     },
-    [rect, payload, cancel],
+    [cancel],
   );
 
-  const confirmCopy = useCallback(() => finish("copy"), [finish]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        void cancel();
+      } else if (event.key === "Enter") {
+        void finish("copy");
+      } else if (event.key === "ArrowLeft") {
+        void switchMonitor(-1);
+      } else if (event.key === "ArrowRight") {
+        void switchMonitor(1);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [cancel, finish, switchMonitor]);
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest(".screenshot-no-draw")) return;
+    const x = event.clientX;
+    const y = event.clientY;
+    drawingRef.current = { x, y };
+    commitRect({ x, y, w: 0, h: 0 });
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    setPointer({ x: event.clientX, y: event.clientY });
+    const start = drawingRef.current;
+    if (!start) return;
+    commitRect(normalizeRect(start.x, start.y, event.clientX, event.clientY));
+  };
+
+  const onPointerUp = () => {
+    if (!drawingRef.current) return;
+    drawingRef.current = null;
+    const current = rectRef.current;
+    if (current && (current.w < 4 || current.h < 4)) {
+      commitRect(null);
+    }
+  };
 
   if (error) {
     return (
@@ -174,15 +183,11 @@ export default function ScreenshotOverlay() {
     );
   }
 
-  if (!payload) {
-    return <div className="screenshot-overlay screenshot-loading" />;
-  }
-
   const hasSelection = !!rect && rect.w >= 4 && rect.h >= 4;
-  const logicalWidth = payload.logicalWidth;
-  const logicalHeight = payload.logicalHeight;
+  const logicalWidth = payload?.logicalWidth ?? window.innerWidth;
+  const logicalHeight = payload?.logicalHeight ?? window.innerHeight;
+  const scaleFactor = payload?.scaleFactor ?? 1;
 
-  // 工具栏尽量贴在选区右下方，靠近边缘时翻转到选区内侧
   let toolbarLeft = rect ? rect.x + rect.w : 0;
   let toolbarTop = rect ? rect.y + rect.h + 8 : 0;
   if (rect) {
@@ -198,26 +203,71 @@ export default function ScreenshotOverlay() {
       onPointerUp={onPointerUp}
     >
       <img
-        ref={imageElRef}
         className="screenshot-bg"
-        src={payload.imageDataUrl}
+        src={payload?.imageDataUrl ?? ""}
         draggable={false}
-        onLoad={showOverlay}
+        onLoad={() => setImageReady(true)}
       />
 
-      {hasSelection && rect && (
+      {!imageReady && <div className="screenshot-dim" />}
+
+      {imageReady && !hasSelection && <div className="screenshot-dim" />}
+
+      {imageReady && hasSelection && rect && (
+        <>
+          <div
+            className="screenshot-mask-band"
+            style={{ left: 0, top: 0, width: "100%", height: Math.max(0, rect.y) }}
+          />
+          <div
+            className="screenshot-mask-band"
+            style={{
+              left: 0,
+              top: rect.y + rect.h,
+              width: "100%",
+              height: Math.max(0, logicalHeight - rect.y - rect.h),
+            }}
+          />
+          <div
+            className="screenshot-mask-band"
+            style={{ left: 0, top: rect.y, width: Math.max(0, rect.x), height: rect.h }}
+          />
+          <div
+            className="screenshot-mask-band"
+            style={{
+              left: rect.x + rect.w,
+              top: rect.y,
+              width: Math.max(0, logicalWidth - rect.x - rect.w),
+              height: rect.h,
+            }}
+          />
+        </>
+      )}
+
+      {imageReady && !hasSelection && pointer && (
+        <>
+          <div className="screenshot-crosshair-h" style={{ top: pointer.y }} />
+          <div className="screenshot-crosshair-v" style={{ left: pointer.x }} />
+        </>
+      )}
+
+      {imageReady && hasSelection && rect && (
         <div
           className="screenshot-rect"
           style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
         >
           <span className="screenshot-size">
-            {Math.round(rect.w * payload.scaleFactor)} × {Math.round(rect.h * payload.scaleFactor)}
+            {Math.round(rect.w * scaleFactor)} × {Math.round(rect.h * scaleFactor)}
           </span>
         </div>
       )}
 
-      {hasSelection && rect && (
-        <div className="screenshot-toolbar" style={{ left: toolbarLeft, top: toolbarTop }}>
+      {imageReady && hasSelection && rect && (
+        <div
+          className="screenshot-toolbar screenshot-no-draw"
+          style={{ left: toolbarLeft, top: toolbarTop }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <button disabled={busy} onClick={() => void finish("copy")}>
             复制
           </button>
@@ -233,8 +283,11 @@ export default function ScreenshotOverlay() {
         </div>
       )}
 
-      {payload.monitorCount > 1 && (
-        <div className="screenshot-monitor-switch">
+      {imageReady && payload && payload.monitorCount > 1 && (
+        <div
+          className="screenshot-monitor-switch screenshot-no-draw"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <button onClick={() => void switchMonitor(-1)} disabled={busy}>
             ◀
           </button>
@@ -247,9 +300,10 @@ export default function ScreenshotOverlay() {
         </div>
       )}
 
-      {!hasSelection && (
+      {imageReady && !hasSelection && (
         <div className="screenshot-hint">
-          拖拽选择区域 · Enter 复制 · Esc 取消{payload.monitorCount > 1 ? " · ← → 切换屏幕" : ""}
+          拖拽选择区域 · Enter 复制 · Esc 取消
+          {payload && payload.monitorCount > 1 ? " · ← → 切换屏幕" : ""}
         </div>
       )}
     </div>
