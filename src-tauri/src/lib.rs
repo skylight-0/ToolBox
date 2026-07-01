@@ -2212,31 +2212,10 @@ fn build_active_payload(
 }
 
 async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> {
-    // 重入保护：若截图会话仍在进行且窗口已可见，则仅聚焦，不重复抓屏
-    // 同时递增代际，使上一轮仍在跑的后台补抓线程放弃写入
-    {
-        let state: State<'_, AppState> = app.state();
-        let gen_guard = state.screenshot_generation.lock();
-        if let Ok(mut gen) = gen_guard {
-            *gen = gen.wrapping_add(1);
-        }
-    }
-    let already_active = app
-        .get_webview_window("screenshot-overlay")
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false)
-        && {
-            let state: State<'_, AppState> = app.state();
-            state
-                .screenshot_session
-                .lock()
-                .map(|session| session.is_some())
-                .unwrap_or(false)
-        };
-    if already_active {
-        if let Some(existing) = app.get_webview_window("screenshot-overlay") {
-            let _ = existing.set_focus();
-        }
+    // 重入保护：若原生 overlay 仍存在且可见，仅聚焦，不重复启动
+    #[cfg(target_os = "windows")]
+    if platform::screenshot_native::is_overlay_active() {
+        platform::screenshot_native::focus_overlay();
         return Ok(());
     }
 
@@ -2261,147 +2240,24 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
         return Err("没有检测到显示器".to_string());
     }
 
-    let cursor = window.cursor_position().ok();
     let was_main_visible = window.is_visible().unwrap_or(false);
     let _ = window.hide();
+    // 主窗口隐藏后稍候片刻再抓屏，避免捕获到正在淡出的侧边栏
+    if was_main_visible {
+        std::thread::sleep(Duration::from_millis(40));
+    }
 
-    // 提前计算活动屏索引，先抓活动屏立即推送，其余屏后台补抓
-    let active_index = cursor
-        .and_then(|position| {
-            monitors.iter().position(|monitor| {
-                position.x >= monitor.x as f64
-                    && position.x < (monitor.x + monitor.width) as f64
-                    && position.y >= monitor.y as f64
-                    && position.y < (monitor.y + monitor.height) as f64
-            })
-        })
-        .unwrap_or(0);
-    let active_monitor = monitors[active_index].clone();
-
-    // 先把 overlay 挪到目标屏并显示（空背景），让窗口瞬间出现，抓屏编码在后台进行
-    show_overlay_on_monitor(&app, &active_monitor, None);
-    log::info!("[perf] overlay 已显示（空背景）");
-
-    // 抓屏 + PNG 编码全部在 spawn_blocking 后台线程完成，不阻塞主线程
-    let need_wait = was_main_visible;
-    let monitor_for_capture = active_monitor.clone();
-    let active_capture = tauri::async_runtime::spawn_blocking(move || {
-        if need_wait {
-            std::thread::sleep(Duration::from_millis(40));
-        }
-        let rect = platform::screenshot::MonitorRect {
-            x: monitor_for_capture.x,
-            y: monitor_for_capture.y,
-            width: monitor_for_capture.width,
-            height: monitor_for_capture.height,
-        };
-        let captures = platform::screenshot::capture_screens(&[rect])?;
-        let capture = captures
-            .into_iter()
-            .next()
-            .ok_or_else(|| "活动屏抓取失败".to_string())?;
-        Ok::<ScreenCapture, String>(ScreenCapture {
-            rgba: capture.rgba.clone(),
-            width: capture.width as u32,
-            height: capture.height as u32,
-            scale_factor: monitor_for_capture.scale_factor,
-        })
-    })
-    .await
-    .map_err(|error| format!("截图任务执行失败: {}", error))??;
-    log::info!("[perf] 抓屏完成（无编码）");
-    let active_screen_capture = active_capture;
-
-    // 写入会话：活动屏 Some，其余 None（后台补抓）
+    // 完全交给原生线程：抓屏 → overlay 渲染 → 选区 → 裁剪 → 复制/保存/钉图，
+    // 全程不经过 WebView，杜绝兆级像素在 IPC 间反复拷贝导致的卡顿。
+    #[cfg(target_os = "windows")]
     {
-        let state: State<'_, AppState> = app.state();
-        let mut session = state
-            .screenshot_session
-            .lock()
-            .map_err(|error| format!("锁定截图会话失败: {}", error))?;
-        let mut captures = vec![None; monitors.len()];
-        captures[active_index] = Some(active_screen_capture.clone());
-        *session = Some(ScreenshotSession {
-            captures,
-            monitors: monitors.clone(),
-            active_index,
-            was_main_visible,
-        });
+        platform::screenshot_native::start_native_screenshot(app.clone(), monitors, was_main_visible);
     }
-
-    let payload = build_active_payload(
-        &active_screen_capture,
-        &active_monitor,
-        monitors.len(),
-        active_index,
-        chrono_like_timestamp(),
-    );
-    // overlay 已提前显示，这里只推送 payload 触发前端渲染背景
-    log::info!("[perf] 推送 payload");
-    if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
-        let _ = overlay.emit("screenshot-payload", payload);
-    }
-
-    // 后台抓取其余屏幕并补全会话，切屏时即可使用
-    let other_monitors: Vec<(usize, MonitorInfo)> = monitors
-        .iter()
-        .enumerate()
-        .filter(|(idx, _)| *idx != active_index)
-        .map(|(idx, monitor)| (idx, monitor.clone()))
-        .collect();
-    if !other_monitors.is_empty() {
-        let app_clone = app.clone();
-        let monitors_for_bg = other_monitors.clone();
-        // 记录当前代际，补抓完成后校验，若已被新会话/取消取代则放弃写入
-        let generation = {
-            let state: State<'_, AppState> = app.state();
-            let gen = state.screenshot_generation.lock().map_err(|e| format!("{}", e))?;
-            *gen
-        };
-        tauri::async_runtime::spawn(async move {
-            let result = tauri::async_runtime::spawn_blocking(move || {
-                let rects: Vec<platform::screenshot::MonitorRect> = monitors_for_bg
-                    .iter()
-                    .map(|(_, monitor)| platform::screenshot::MonitorRect {
-                        x: monitor.x,
-                        y: monitor.y,
-                        width: monitor.width,
-                        height: monitor.height,
-                    })
-                    .collect();
-                platform::screenshot::capture_screens(&rects)
-            })
-            .await;
-            if let Ok(Ok(captures)) = result {
-                let state: State<'_, AppState> = app_clone.state();
-                // 先校验代际，过期则直接丢弃抓取结果，避免写入新会话
-                let gen_ok = state
-                    .screenshot_generation
-                    .lock()
-                    .map(|g| *g == generation)
-                    .unwrap_or(false);
-                if !gen_ok {
-                    return;
-                }
-                let session_lock = state.screenshot_session.lock();
-                if let Ok(mut session_lock) = session_lock {
-                    if let Some(session) = session_lock.as_mut() {
-                        for (capture_idx, (monitor_idx, monitor_info)) in
-                            other_monitors.iter().enumerate()
-                        {
-                            if let Some(capture) = captures.get(capture_idx) {
-                                session.captures[*monitor_idx] = Some(ScreenCapture {
-                                    rgba: capture.rgba.clone(),
-                                    width: capture.width as u32,
-                                    height: capture.height as u32,
-                                    scale_factor: monitor_info.scale_factor,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        });
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = monitors;
+        let _ = was_main_visible;
+        return Err("截图仅支持 Windows 平台".to_string());
     }
 
     Ok(())
@@ -2492,28 +2348,11 @@ fn switch_screenshot_monitor(
 }
 
 #[tauri::command]
-fn cancel_screenshot(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(overlay) = app.get_webview_window("screenshot-overlay") {
-        let _ = overlay.hide();
-        let _ = overlay.emit("screenshot-reset", ());
-    }
-    let restore_main = {
-        let mut session = state
-            .screenshot_session
-            .lock()
-            .map_err(|error| format!("锁定截图会话失败: {}", error))?;
-        // 递增代际，使仍在跑的后台补抓线程放弃写入
-        let gen_guard = state.screenshot_generation.lock();
-        if let Ok(mut gen) = gen_guard {
-            *gen = gen.wrapping_add(1);
-        }
-        session
-            .take()
-            .map(|session| session.was_main_visible)
-            .unwrap_or(false)
-    };
-    if restore_main {
-        show_sidebar_window(&app, &app.state());
+fn cancel_screenshot(_app: tauri::AppHandle, _state: State<'_, AppState>) -> Result<(), String> {
+    // 向原生 overlay 窗口发送 WM_CLOSE，overlay 自身的 WM_DESTROY 会负责恢复主窗口。
+    #[cfg(target_os = "windows")]
+    {
+        platform::screenshot_native::cancel_native_screenshot();
     }
     Ok(())
 }
@@ -3095,52 +2934,9 @@ pub fn run() {
                 let _ = window.hide();
             }
 
-            // 预创建并常驻截图 overlay 窗口（隐藏），避免触发时 WebView 冷启动延迟。
-            // 触发时只负责挪屏 + show + 推送 payload，体感瞬时。
-            if app.get_webview_window("screenshot-overlay").is_none() {
-                let overlay = WebviewWindowBuilder::new(
-                    app,
-                    "screenshot-overlay",
-                    WebviewUrl::App("/#screenshot".into()),
-                )
-                .title("")
-                .inner_size(1.0, 1.0)
-                .position(0.0, 0.0)
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .resizable(false)
-                .shadow(false)
-                .focused(false)
-                .visible(false)
-                .build()
-                .map_err(|error| format!("预创建截图窗口失败: {}", error))?;
-                let _ = overlay.hide();
-            }
 
-            // 预创建钉图右键菜单窗口（隐藏），右键时复用，避免 WebView 冷启动
-            if app.get_webview_window("pin-menu").is_none() {
-                let menu_window = WebviewWindowBuilder::new(
-                    app,
-                    "pin-menu",
-                    WebviewUrl::App("/#pin-menu".into()),
-                )
-                .title("")
-                .inner_size(132.0, 164.0)
-                .position(0.0, 0.0)
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .resizable(false)
-                .shadow(false)
-                .focused(false)
-                .visible(false)
-                .build()
-                .map_err(|error| format!("预创建钉图菜单窗口失败: {}", error))?;
-                let _ = menu_window.hide();
-            }
+            // 截图 overlay 与钉图右键菜单现已改为纯原生 Win32 窗口（见
+            // platform::screenshot_native），不再预创建 WebView，省去冷启动与内存开销。
 
             // 预创建测试窗口（隐藏），Ctrl+Shift+T 唤出用于测量延迟
             if app.get_webview_window("test-window").is_none() {

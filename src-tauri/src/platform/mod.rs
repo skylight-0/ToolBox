@@ -4,6 +4,9 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub mod screenshot;
 
+#[cfg(target_os = "windows")]
+pub mod screenshot_native;
+
 #[cfg(not(target_os = "windows"))]
 pub mod screenshot {
     pub struct MonitorRect {
