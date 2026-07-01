@@ -22,7 +22,10 @@ export default function ScreenshotOverlay() {
   const payloadRef = useRef<ActiveScreenshotPayload | null>(null);
   const busyRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const bitmapRef = useRef<ImageBitmap | null>(null);
+  // 复用 ImageData 缓冲区，避免每次唤出分配 ~14MB 导致 GC 卡顿
+  const imageDataRef = useRef<ImageData | null>(null);
+  // 复用 ArrayBuffer 接收缓冲区，避免每次 fetch 分配新 14MB
+  const recvBufferRef = useRef<Uint8Array | null>(null);
 
   const commitRect = useCallback((next: CropRect | null) => {
     rectRef.current = next;
@@ -39,33 +42,64 @@ export default function ScreenshotOverlay() {
     // 每次收到新截图时重置 busy，避免上一次操作遗留的 busy 状态导致按钮禁用
     busyRef.current = false;
     setBusy(false);
-    // 用 createImageBitmap 在 worker 线程解码 PNG，再 drawImage 到 canvas，
-    // 避免 putImageData 的主线程大块内存分配导致 GC 卡顿
+    // 直接拉取原始 RGBA 字节，用 putImageData 绘制，跳过 PNG 编/解码
+    // 复用接收缓冲区和 ImageData，避免每次分配 ~28MB 导致 GC 卡顿
     try {
       const tFetch = performance.now();
       const response = await fetch(
         `http://screenshot-frame.localhost/active?v=${data.frameId}`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const blob = await response.blob();
-      console.log(`[perf] fetch+blob 完成 耗时=${(performance.now() - tFetch).toFixed(1)}ms`);
-      // 先释放上一张 bitmap 再创建新的，避免多张同时驻留
-      if (bitmapRef.current) {
-        bitmapRef.current.close();
-        bitmapRef.current = null;
+      const expectedSize = data.physicalWidth * data.physicalHeight * 4;
+      // 复用接收缓冲区，尺寸变化时才重新分配
+      if (!recvBufferRef.current || recvBufferRef.current.length < expectedSize) {
+        recvBufferRef.current = new Uint8Array(expectedSize);
       }
-      const tBitmap = performance.now();
-      const bitmap = await createImageBitmap(blob);
-      console.log(`[perf] createImageBitmap 完成 耗时=${(performance.now() - tBitmap).toFixed(1)}ms`);
-      bitmapRef.current = bitmap;
+      const recv = recvBufferRef.current;
+      const reader = response.body?.getReader();
+      if (reader) {
+        let offset = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          recv.set(value, offset);
+          offset += value.length;
+        }
+      } else {
+        // fallback：不支持流式时用 arrayBuffer
+        const buf = await response.arrayBuffer();
+        recv.set(new Uint8Array(buf), 0);
+      }
+      console.log(`[perf] fetch 完成 耗时=${(performance.now() - tFetch).toFixed(1)}ms`);
+      const tRender = performance.now();
       const canvas = canvasRef.current;
       if (canvas) {
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
+        canvas.width = data.physicalWidth;
+        canvas.height = data.physicalHeight;
         const ctx = canvas.getContext("2d");
-        if (ctx) ctx.drawImage(bitmap, 0, 0);
+        if (ctx) {
+          // 复用 ImageData，尺寸变化时才重新分配
+          if (
+            !imageDataRef.current ||
+            imageDataRef.current.width !== data.physicalWidth ||
+            imageDataRef.current.height !== data.physicalHeight
+          ) {
+            imageDataRef.current = new ImageData(
+              data.physicalWidth,
+              data.physicalHeight,
+            );
+          }
+          const imageData = imageDataRef.current;
+          // 直接从接收缓冲区拷贝到 ImageData
+          new Uint8Array(imageData.data.buffer).set(
+            recv.subarray(0, expectedSize),
+          );
+          ctx.putImageData(imageData, 0, 0);
+        }
       }
       setImageReady(true);
+      console.log(`[perf] putImageData 完成 耗时=${(performance.now() - tRender).toFixed(1)}ms`);
       console.log(`[perf] 背景渲染就绪 总耗时=${(performance.now() - t0).toFixed(1)}ms`);
     } catch (loadError) {
       setError(`加载截图失败: ${String(loadError)}`);
@@ -94,10 +128,8 @@ export default function ScreenshotOverlay() {
           rectRef.current = null;
           payloadRef.current = null;
           busyRef.current = false;
-          if (bitmapRef.current) {
-            bitmapRef.current.close();
-            bitmapRef.current = null;
-          }
+          imageDataRef.current = null;
+          recvBufferRef.current = null;
         }),
       ]);
       unlistenPayload = unsubscribePayload;

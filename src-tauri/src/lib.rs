@@ -114,10 +114,8 @@ struct MonitorInfo {
 
 #[derive(Clone)]
 struct ScreenCapture {
-    // 物理像素 RGBA 字节，行序自顶向下；选区裁剪使用
+    // 物理像素 RGBA 字节，行序自顶向下；选区裁剪与 overlay 背景均直接使用
     rgba: Vec<u8>,
-    // 预编码 PNG 字节，供 overlay 背景通过自定义协议直接返回
-    png_bytes: Vec<u8>,
     width: u32,
     height: u32,
     scale_factor: f64,
@@ -2302,14 +2300,8 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
             .into_iter()
             .next()
             .ok_or_else(|| "活动屏抓取失败".to_string())?;
-        let png_bytes = rgba_to_png_bytes(
-            &capture.rgba,
-            capture.width as u32,
-            capture.height as u32,
-        )?;
         Ok::<ScreenCapture, String>(ScreenCapture {
             rgba: capture.rgba.clone(),
-            png_bytes,
             width: capture.width as u32,
             height: capture.height as u32,
             scale_factor: monitor_for_capture.scale_factor,
@@ -2317,7 +2309,7 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
     })
     .await
     .map_err(|error| format!("截图任务执行失败: {}", error))??;
-    log::info!("[perf] 抓屏+PNG编码完成");
+    log::info!("[perf] 抓屏完成（无编码）");
     let active_screen_capture = active_capture;
 
     // 写入会话：活动屏 Some，其余 None（后台补抓）
@@ -2398,15 +2390,8 @@ async fn start_screenshot_internal(app: tauri::AppHandle) -> Result<(), String> 
                             other_monitors.iter().enumerate()
                         {
                             if let Some(capture) = captures.get(capture_idx) {
-                                let png_bytes = rgba_to_png_bytes(
-                                    &capture.rgba,
-                                    capture.width as u32,
-                                    capture.height as u32,
-                                )
-                                .unwrap_or_default();
                                 session.captures[*monitor_idx] = Some(ScreenCapture {
                                     rgba: capture.rgba.clone(),
-                                    png_bytes,
                                     width: capture.width as u32,
                                     height: capture.height as u32,
                                     scale_factor: monitor_info.scale_factor,
@@ -2876,8 +2861,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .register_uri_scheme_protocol("screenshot-frame", |ctx, request| {
-            // 返回当前活动屏的预编码 PNG 字节，前端用 createImageBitmap 在
-            // worker 线程解码，避免 putImageData 的主线程 GC 压力
+            // 直接返回当前活动屏的原始 RGBA 字节，跳过 PNG 编码
+            // 前端用 putImageData 绘制，省去编/解码全流程
             let app = ctx.app_handle();
             let state: State<'_, AppState> = app.state();
             let body = state
@@ -2888,7 +2873,7 @@ pub fn run() {
                     session.as_ref().and_then(|s| {
                         s.captures
                             .get(s.active_index)
-                            .and_then(|c| c.as_ref().map(|c| c.png_bytes.clone()))
+                            .and_then(|c| c.as_ref().map(|c| c.rgba.clone()))
                     })
                 })
                 .unwrap_or_default();
@@ -2902,7 +2887,7 @@ pub fn run() {
                     .unwrap();
             }
             tauri::http::Response::builder()
-                .header("content-type", "image/png")
+                .header("content-type", "application/octet-stream")
                 .header("cache-control", "no-store")
                 .header("access-control-allow-origin", "*")
                 .body(body)
