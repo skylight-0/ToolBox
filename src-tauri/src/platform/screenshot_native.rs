@@ -41,6 +41,8 @@ const CS_DBLCLKS: u32 = 0x0008;
 const SW_HIDE: i32 = 0;
 const SW_SHOW: i32 = 5;
 const SW_SHOWNA: i32 = 8;
+const SWP_NOSIZE: u32 = 0x0001;
+const SWP_NOMOVE: u32 = 0x0002;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
 const GWLP_USERDATA: i32 = -21;
@@ -493,6 +495,7 @@ struct OverlayState {
     buttons: Vec<(RECT, &'static str)>,
     hover_btn: i32,
     was_main_visible: bool,
+    skip_restore_sidebar: bool,
     last_paint: Instant,
 }
 
@@ -702,7 +705,8 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
                 let st = &mut *state_ptr;
                 clear_overlay_hwnd(hwnd);
                 let was_main_visible = st.was_main_visible;
-                if was_main_visible {
+                let skip_restore = st.skip_restore_sidebar;
+                if was_main_visible && !skip_restore {
                     let app2 = st.app.clone();
                     let _ = st.app.run_on_main_thread(move || {
                         crate::show_sidebar_window(&app2, &app2.state::<crate::AppState>());
@@ -878,6 +882,7 @@ unsafe fn perform_action(state_ptr: *mut OverlayState, action: &str) {
                     }
                 }
             }
+            st.skip_restore_sidebar = true;
             let _ = PostMessageW(st.hwnd, WM_CLOSE, 0, 0);
         }
         _ => {}
@@ -932,19 +937,19 @@ unsafe fn create_pin_window(
         base_w: w,
         base_h: h,
         scale: 1.0,
-        hwnd: null_hwnd(),
-        dragging: false,
-        drag_cursor: POINT { x: 0, y: 0 },
-        drag_win_pos: POINT { x: 0, y: 0 },
-        last_click: None,
-    };
+                hwnd: null_hwnd(),
+                dragging: false,
+                drag_cursor: POINT { x: 0, y: 0 },
+                drag_win_pos: POINT { x: 0, y: 0 },
+                last_click: None,
+            };
     // 所有权转移到 PinState，避免 CroppedImage::drop 释放资源。
     std::mem::forget(cropped);
 
     let state_ptr = Box::into_raw(Box::new(state));
     let hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-        overlay_class_name(),
+        pin_class_name(),
         std::ptr::null(),
         WS_POPUP,
         phys_x,
@@ -963,7 +968,8 @@ unsafe fn create_pin_window(
 
     window_count_inc();
     (*state_ptr).hwnd = hwnd;
-    let _ = ShowWindow(hwnd, SW_SHOWNA);
+    let _ = ShowWindow(hwnd, SW_SHOW);
+    let _ = SetForegroundWindow(hwnd);
     let _ = UpdateWindow(hwnd);
     Ok(())
 }
@@ -990,10 +996,25 @@ unsafe extern "system" fn pin_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let mut ps: PAINTSTRUCT = std::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
             if !hdc.is_null() {
-                let _ = SetStretchBltMode(hdc, HALFTONE);
                 let cw = (st.base_w as f64 * st.scale).round() as i32;
                 let ch = (st.base_h as f64 * st.scale).round() as i32;
-                let _ = StretchBlt(hdc, 0, 0, cw, ch, st.mem_dc, 0, 0, st.base_w, st.base_h, SRCCOPY);
+                if cw == st.base_w && ch == st.base_h {
+                    let _ = BitBlt(hdc, 0, 0, cw, ch, st.mem_dc, 0, 0, SRCCOPY);
+                } else {
+                    let _ = SetStretchBltMode(hdc, HALFTONE);
+                    let _ = StretchBlt(hdc, 0, 0, cw, ch, st.mem_dc, 0, 0, st.base_w, st.base_h, SRCCOPY);
+                }
+                let pen = CreatePen(PS_SOLID, 2, 0x00D77800);
+                if !pen.is_null() {
+                    let old = SelectObject(hdc, pen);
+                    let _ = MoveToEx(hdc, 0, 0, std::ptr::null_mut());
+                    let _ = LineTo(hdc, cw, 0);
+                    let _ = LineTo(hdc, cw, ch);
+                    let _ = LineTo(hdc, 0, ch);
+                    let _ = LineTo(hdc, 0, 0);
+                    let _ = SelectObject(hdc, old);
+                    let _ = DeleteObject(pen);
+                }
                 let _ = EndPaint(hwnd, &ps);
             }
             return 0;
@@ -1004,14 +1025,17 @@ unsafe extern "system" fn pin_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 return 0;
             }
             let st = &mut *state_ptr;
-            if let Some(t) = st.last_click {
-                if t.elapsed() < Duration::from_millis(300) {
-                    st.last_click = None;
-                    let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
-                    return 0;
-                }
-            }
+            let is_double = st
+                .last_click
+                .map(|t| t.elapsed() < Duration::from_millis(500))
+                .unwrap_or(false);
             st.last_click = Some(Instant::now());
+            if is_double {
+                st.dragging = false;
+                let _ = ReleaseCapture();
+                let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                return 0;
+            }
             let mut cur = POINT { x: 0, y: 0 };
             let _ = GetCursorPos(&mut cur);
             let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
@@ -1033,7 +1057,7 @@ unsafe extern "system" fn pin_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let _ = GetCursorPos(&mut cur);
                 let nx = st.drag_win_pos.x + (cur.x - st.drag_cursor.x);
                 let ny = st.drag_win_pos.y + (cur.y - st.drag_cursor.y);
-                let _ = SetWindowPos(hwnd, null_hwnd(), nx, ny, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ = SetWindowPos(hwnd, null_hwnd(), nx, ny, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE);
             }
             return 0;
         }
@@ -1093,7 +1117,7 @@ unsafe extern "system" fn pin_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             st.scale = (st.scale * factor).clamp(0.2, 8.0);
             let cw = (st.base_w as f64 * st.scale).round() as i32;
             let ch = (st.base_h as f64 * st.scale).round() as i32;
-            let _ = SetWindowPos(hwnd, null_hwnd(), 0, 0, cw, ch, SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ = SetWindowPos(hwnd, null_hwnd(), 0, 0, cw, ch, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE);
             let _ = InvalidateRect(hwnd, std::ptr::null(), 0);
             return 0;
         }
@@ -1142,7 +1166,7 @@ unsafe fn handle_pin_menu(state_ptr: *mut PinState, cmd: usize) {
         MENU_RESET => {
             let st = &mut *state_ptr;
             st.scale = 1.0;
-            let _ = SetWindowPos(st.hwnd, null_hwnd(), 0, 0, st.base_w, st.base_h, SWP_NOZORDER | SWP_NOACTIVATE);
+            let _ = SetWindowPos(st.hwnd, null_hwnd(), 0, 0, st.base_w, st.base_h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE);
             let _ = InvalidateRect(st.hwnd, std::ptr::null(), 0);
         }
         MENU_CLOSE => {
@@ -1199,7 +1223,7 @@ unsafe fn register_classes() {
 
     let pin_cls = WNDCLASSEXW {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
+        style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(pin_proc),
         cbClsExtra: 0,
         cbWndExtra: 0,
@@ -1270,6 +1294,7 @@ pub fn start_native_screenshot(app: tauri::AppHandle, monitors: Vec<MonitorInfo>
                 buttons: Vec::new(),
                 hover_btn: -1,
                 was_main_visible,
+                skip_restore_sidebar: false,
                 last_paint: Instant::now(),
             };
             let state_ptr = Box::into_raw(Box::new(state));

@@ -95,6 +95,7 @@ type ToastNotification = SidebarNotification & {
 };
 
 const CLIPBOARD_TEXT_POLL_INTERVAL = 500;
+// NOTE: 此 2000ms 与「截图复制后快捷键延迟 2s」症状吻合，详见 checkClipboard 内 TODO。
 const CLIPBOARD_IMAGE_POLL_INTERVAL = 2000;
 const TOOL_ORDER_SETTING_KEY = "tool_order";
 const PASSWORD_REQUIRE_AUTH_SETTING_KEY = "password_require_auth";
@@ -569,6 +570,15 @@ function App() {
         }
         lastClipboardImageCheckAtRef.current = now;
 
+        // TODO(已知性能问题): 截图复制后立即按 Ctrl+Shift+A 截图快捷键会延迟约 2s 才触发。
+        // 根因：readImage() 的 IPC 在 Tauri 主线程上同步读取整张截图 RGBA（数千万像素），
+        // 随后 canvas.toDataURL 做 PNG 编码 + insert_clipboard_record 写 SQLite，
+        // 整段重路径占用主线程，而全局快捷键 handler 也在主线程分发，导致 WM_HOTKEY 排队等待。
+        // 2000ms 的延迟与 CLIPBOARD_IMAGE_POLL_INTERVAL 完全吻合。
+        // 临时对策：已关闭剪贴板增强监听。最终修复方向：
+        //   1) 截图 overlay 活动期间暂停本轮询，或 is_overlay_active() 时跳过图像读取；
+        //   2) 让原生 copy 直接把已裁剪 PNG 落库，不再从前端把同一张图读回来；
+        //   3) readImage 改走 spawn_blocking，不占用主线程。
         try {
           const imageContent = await readClipboardImageAsDataUrl(readImage);
           if (imageContent && imageContent !== lastClipboardContentRef.current) {
