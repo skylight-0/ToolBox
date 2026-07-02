@@ -6,6 +6,8 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 type ItemType = "app" | "folder" | "file";
 type OpenMode = "internal" | "external";
 
+const DEFAULT_GROUP_ID = "default";
+
 interface LauncherItem {
   id: string;
   name: string;
@@ -14,12 +16,31 @@ interface LauncherItem {
   item_type: ItemType;
   open_mode: OpenMode | null;
   order: number;
+  group_id: string | null;
+  icon: string | null;
+}
+
+interface LauncherGroup {
+  id: string;
+  name: string;
+  order: number;
+}
+
+interface LauncherState {
+  items: LauncherItem[];
+  groups: LauncherGroup[];
 }
 
 interface DirEntry {
   name: string;
   path: string;
   is_dir: boolean;
+}
+
+interface ContextMenu {
+  itemId: string;
+  x: number;
+  y: number;
 }
 
 function fuzzyScore(query: string, text: string): number {
@@ -51,36 +72,44 @@ function lastSegment(p: string): string {
 function TypeIcon({ type }: { type: ItemType | "dir" | "file" }) {
   if (type === "folder" || type === "dir") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
         <path fill="currentColor" d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.7a1.5 1.5 0 0 1 1.06.44L11.7 6.9l7.8.1A1.5 1.5 0 0 1 21 8.5v9A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z" />
       </svg>
     );
   }
   if (type === "app") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
         <path fill="currentColor" d="M3 5h18v14H3zm2 2v2h14V7zm0 4v6h14v-6z" />
       </svg>
     );
   }
   return (
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
       <path fill="currentColor" d="M6 2h8l6 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm7 1.5V9h5.5z" />
     </svg>
   );
 }
 
+function groupKeyOf(item: LauncherItem): string {
+  return item.group_id ?? DEFAULT_GROUP_ID;
+}
+
 export default function DrawerWindow() {
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<LauncherItem[]>([]);
+  const [state, setState] = useState<LauncherState>({ items: [], groups: [] });
   const [query, setQuery] = useState("");
   const [defaultMode, setDefaultMode] = useState<OpenMode>("external");
   const [drillPath, setDrillPath] = useState<string | null>(null);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [menu, setMenu] = useState<ContextMenu | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
 
   const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const editRef = useRef<HTMLInputElement>(null);
 
   const syncHeight = () => {
     const panel = panelRef.current;
@@ -92,10 +121,20 @@ export default function DrawerWindow() {
     void invoke("resize_drawer_to_content", { width, height }).catch(console.error);
   };
 
-  const refreshItems = useCallback(async () => {
+  const persist = useCallback(async (next: LauncherState) => {
+    setState(next);
     try {
-      const data = await invoke<LauncherItem[]>("launcher_load");
-      setItems(data);
+      const saved = await invoke<LauncherState>("launcher_save", { state: next });
+      setState(saved);
+    } catch (error) {
+      console.error("[launcher] 保存失败:", error);
+    }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    try {
+      const data = await invoke<LauncherState>("launcher_load");
+      setState(data);
       const mode = await invoke<string>("launcher_get_default_open_mode");
       setDefaultMode(mode === "internal" ? "internal" : "external");
     } catch (error) {
@@ -155,18 +194,80 @@ export default function DrawerWindow() {
     [drillInto, closeDrawer]
   );
 
-  const removeItem = useCallback(async (id: string) => {
-    try {
-      const data = await invoke<LauncherItem[]>("launcher_remove", { id });
-      setItems(data);
-    } catch (error) {
-      console.error("[launcher] 删除失败:", error);
-    }
-  }, []);
+  // 分组：重命名
+  const commitRename = useCallback(
+    (groupId: string) => {
+      const name = draftName.trim() || "未命名分组";
+      setEditingGroupId(null);
+      const next: LauncherState = {
+        items: state.items,
+        groups: state.groups.map((g) => (g.id === groupId ? { ...g, name } : g)),
+      };
+      void persist(next);
+    },
+    [draftName, state, persist]
+  );
+
+  // 分组：新建
+  const addGroup = useCallback(() => {
+    const id = crypto.randomUUID();
+    const order = state.groups.reduce((m, g) => Math.max(m, g.order), 0) + 1;
+    const next: LauncherState = {
+      items: state.items,
+      groups: [...state.groups, { id, name: "新分组", order }],
+    };
+    setEditingGroupId(id);
+    setDraftName("新分组");
+    void persist(next);
+  }, [state, persist]);
+
+  // 分组：删除（条目回收至默认分组）
+  const deleteGroup = useCallback(
+    (groupId: string) => {
+      if (groupId === DEFAULT_GROUP_ID) return;
+      const next: LauncherState = {
+        items: state.items.map((i) =>
+          groupKeyOf(i) === groupId ? { ...i, group_id: null } : i
+        ),
+        groups: state.groups.filter((g) => g.id !== groupId),
+      };
+      void persist(next);
+    },
+    [state, persist]
+  );
+
+  // 条目：移动到分组
+  const moveItem = useCallback(
+    (itemId: string, groupId: string) => {
+      setMenu(null);
+      const target = groupId === DEFAULT_GROUP_ID ? null : groupId;
+      const next: LauncherState = {
+        items: state.items.map((i) =>
+          i.id === itemId ? { ...i, group_id: target } : i
+        ),
+        groups: state.groups,
+      };
+      void persist(next);
+    },
+    [state, persist]
+  );
+
+  // 条目：移除
+  const removeItem = useCallback(
+    (itemId: string) => {
+      setMenu(null);
+      const next: LauncherState = {
+        items: state.items.filter((i) => i.id !== itemId),
+        groups: state.groups,
+      };
+      void persist(next);
+    },
+    [state, persist]
+  );
 
   useEffect(() => {
     console.log("[drawer] DrawerWindow mounted");
-    void refreshItems();
+    void refresh();
 
     const unlistenToggle = listen("toggle-drawer", () => {
       console.log("[drawer] 收到 toggle-drawer 事件");
@@ -188,8 +289,8 @@ export default function DrawerWindow() {
         setDragOver(false);
         const paths = payload.paths;
         if (paths && paths.length) {
-          invoke<LauncherItem[]>("launcher_add_paths", { paths })
-            .then(setItems)
+          invoke<LauncherState>("launcher_add_paths", { paths })
+            .then(setState)
             .catch((error) => console.error("[launcher] 添加失败:", error));
         }
       }
@@ -208,18 +309,20 @@ export default function DrawerWindow() {
       unlistenDrag.then((fn) => fn()).catch(() => {});
       unlistenToggle.then((fn) => fn()).catch(() => {});
     };
-  }, [refreshItems]);
+  }, [refresh]);
 
-  // 打开时刷新数据并重置搜索/下钻
+  // 打开时刷新并重置
   useEffect(() => {
     if (!open) return;
-    void refreshItems();
+    void refresh();
     setQuery("");
     setDrillPath(null);
     setEntries([]);
-  }, [open, refreshItems]);
+    setMenu(null);
+    setEditingGroupId(null);
+  }, [open, refresh]);
 
-  // 关闭动画结束后通知 Rust 隐藏窗口
+  // 关闭动画结束后隐藏窗口
   useEffect(() => {
     if (open) return;
     const timer = window.setTimeout(() => {
@@ -228,13 +331,39 @@ export default function DrawerWindow() {
     return () => window.clearTimeout(timer);
   }, [open]);
 
-  // 全局键盘：Esc 返回/收起；可打印字符聚焦搜索框并补入
+  // 编辑分组名时自动聚焦
+  useEffect(() => {
+    if (editingGroupId && editRef.current) {
+      editRef.current.focus();
+      editRef.current.select();
+    }
+  }, [editingGroupId]);
+
+  // 关闭右键菜单
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menu]);
+
+  // 全局键盘：Esc 返回/收起；可打印字符聚焦搜索框
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!open) return;
       if (event.key === "Escape") {
         event.preventDefault();
-        if (drillPath) {
+        if (menu) {
+          setMenu(null);
+        } else if (editingGroupId) {
+          setEditingGroupId(null);
+        } else if (drillPath) {
           setDrillPath(null);
           setEntries([]);
         } else {
@@ -242,6 +371,7 @@ export default function DrawerWindow() {
         }
         return;
       }
+      if (editingGroupId) return;
       const focused = document.activeElement === searchRef.current;
       if (
         !focused &&
@@ -258,11 +388,30 @@ export default function DrawerWindow() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [open, drillPath]);
+  }, [open, drillPath, menu, editingGroupId]);
+
+  const groupsSorted = useMemo(
+    () => state.groups.slice().sort((a, b) => a.order - b.order || a.name.localeCompare(b.name)),
+    [state.groups]
+  );
+
+  const itemsByGroup = useMemo(() => {
+    const map = new Map<string, LauncherItem[]>();
+    for (const item of state.items) {
+      const key = groupKeyOf(item);
+      const arr = map.get(key) ?? [];
+      arr.push(item);
+      map.set(key, arr);
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    }
+    return map;
+  }, [state.items]);
 
   const filteredItems = useMemo(() => {
-    if (!query) return items;
-    return items
+    if (!query) return null;
+    return state.items
       .map((item) => ({
         item,
         score: Math.max(fuzzyScore(query, item.name) * 2, fuzzyScore(query, item.path)),
@@ -270,7 +419,7 @@ export default function DrawerWindow() {
       .filter((x) => x.score >= 0)
       .sort((a, b) => b.score - a.score)
       .map((x) => x.item);
-  }, [items, query]);
+  }, [state.items, query]);
 
   const filteredEntries = useMemo(() => {
     if (!query) return entries;
@@ -282,17 +431,29 @@ export default function DrawerWindow() {
   }, [entries, query]);
 
   const drilling = drillPath !== null;
-  const displayList = drilling ? filteredEntries : filteredItems;
+  const searching = !!query && !drilling;
+  const menuItem = menu ? state.items.find((i) => i.id === menu.itemId) ?? null : null;
 
-  const emptyText = (() => {
-    if (dragOver) return null;
-    if (drilling) {
-      if (!entries.length) return "空文件夹";
-      return filteredEntries.length ? null : "无匹配结果";
-    }
-    if (!items.length) return "拖入文件 / 文件夹 / 快捷方式来添加";
-    return filteredItems.length ? null : "无匹配结果";
-  })();
+  const renderTile = (key: string, label: string, sub: string, iconType: ItemType | "dir" | "file", onClick: () => void, onContext?: (e: React.MouseEvent) => void, icon?: string | null) => (
+    <button
+      key={key}
+      className="launcher-tile"
+      onClick={onClick}
+      onContextMenu={onContext}
+      title={sub}
+    >
+      <span className="launcher-tile-icon" data-type={iconType}>
+        {icon && icon.length > 0 ? (
+          <img className="launcher-tile-img" src={icon} alt="" draggable={false} />
+        ) : (
+          <TypeIcon type={iconType} />
+        )}
+      </span>
+      <span className="launcher-tile-label">{label}</span>
+    </button>
+  );
+
+  const homeEmpty = !state.items.length && !dragOver;
 
   return (
     <div className={`drawer-window ${open ? "is-open" : "is-closed"}`}>
@@ -327,9 +488,7 @@ export default function DrawerWindow() {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Backspace" && !query && drilling) {
-                goHome();
-              }
+              if (event.key === "Backspace" && !query && drilling) goHome();
             }}
             spellCheck={false}
           />
@@ -348,52 +507,128 @@ export default function DrawerWindow() {
           </div>
         )}
 
-        <div className="launcher-list">
-          {displayList.map((row) => {
-            const isItem = !drilling;
-            const item = isItem ? (row as LauncherItem) : null;
-            const entry = !isItem ? (row as DirEntry) : null;
-            const name = item ? item.name : entry ? entry.name : "";
-            const sub = item ? item.path : entry ? entry.path : "";
-            const iconType = item ? item.item_type : entry ? (entry.is_dir ? "dir" : "file") : "file";
-            return (
-              <button
-                key={item ? item.id : entry ? entry.path : name}
-                className="launcher-item"
-                onClick={() => (item ? openItem(item) : entry ? openEntry(entry) : undefined)}
-                title={sub}
-              >
-                <span className="launcher-item-icon">
-                  <TypeIcon type={iconType} />
-                </span>
-                <span className="launcher-item-text">
-                  <span className="launcher-item-name">{name}</span>
-                  <span className="launcher-item-path">{sub}</span>
-                </span>
-                {item && (
-                  <span
-                    className="launcher-item-del"
-                    role="button"
-                    tabIndex={-1}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void removeItem(item.id);
-                    }}
-                    title="移除"
-                  >
-                    ×
-                  </span>
-                )}
-              </button>
-            );
-          })}
-          {emptyText && <div className="launcher-empty">{emptyText}</div>}
+        <div className="launcher-scroll">
+          {drilling ? (
+            <div className="launcher-grid">
+              {filteredEntries.map((entry) =>
+                renderTile(
+                  entry.path,
+                  entry.name,
+                  entry.path,
+                  entry.is_dir ? "dir" : "file",
+                  () => void openEntry(entry)
+                )
+              )}
+              {!filteredEntries.length && (
+                <div className="launcher-empty">{entries.length ? "无匹配结果" : "空文件夹"}</div>
+              )}
+            </div>
+          ) : searching ? (
+            <div className="launcher-grid">
+              {filteredItems?.map((item) =>
+                renderTile(item.id, item.name, item.path, item.item_type, () => void openItem(item), undefined, item.icon)
+              )}
+              {!filteredItems?.length && <div className="launcher-empty">无匹配结果</div>}
+            </div>
+          ) : (
+            <div className="launcher-groups">
+              {groupsSorted.map((group) => {
+                const list = itemsByGroup.get(group.id) ?? [];
+                return (
+                  <section className="launcher-group" key={group.id}>
+                    <header className="launcher-group-header">
+                      {editingGroupId === group.id ? (
+                        <input
+                          ref={editRef}
+                          className="launcher-group-name-input"
+                          value={draftName}
+                          onChange={(e) => setDraftName(e.target.value)}
+                          onBlur={() => commitRename(group.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              commitRename(group.id);
+                            } else if (e.key === "Escape") {
+                              setEditingGroupId(null);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <button
+                          className="launcher-group-name"
+                          onClick={() => {
+                            setEditingGroupId(group.id);
+                            setDraftName(group.name);
+                          }}
+                          title="点击重命名"
+                        >
+                          {group.name}
+                        </button>
+                      )}
+                      {group.id !== DEFAULT_GROUP_ID && (
+                        <button
+                          className="launcher-group-del"
+                          onClick={() => deleteGroup(group.id)}
+                          title="删除分组（条目移入常用）"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </header>
+                    <div className="launcher-grid">
+                      {list.map((item) =>
+                        renderTile(
+                          item.id,
+                          item.name,
+                          item.path,
+                          item.item_type,
+                          () => void openItem(item),
+                          (e) => {
+                            e.preventDefault();
+                            setMenu({ itemId: item.id, x: e.clientX, y: e.clientY });
+                          },
+                          item.icon
+                        )
+                      )}
+                      {!list.length && <div className="launcher-empty">拖入文件添加到该分组</div>}
+                    </div>
+                  </section>
+                );
+              })}
+              <button className="launcher-add-group" onClick={addGroup}>＋ 新建分组</button>
+              {homeEmpty && <div className="launcher-empty launcher-empty-hero">拖入文件 / 文件夹 / 快捷方式来添加</div>}
+            </div>
+          )}
         </div>
 
         <div className="drawer-footer">
-          <kbd>Alt</kbd>+<kbd>Q</kbd> 切换 · <kbd>Esc</kbd> 返回/收起 · 拖入文件添加
+          <kbd>Alt</kbd>+<kbd>Q</kbd> 切换 · <kbd>Esc</kbd> 返回/收起 · 右键图标可移动分组
         </div>
       </div>
+
+      {menu && menuItem && (
+        <div
+          className="launcher-ctx"
+          style={{ left: menu.x, top: menu.y }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="launcher-ctx-title">移动到分组</div>
+          {groupsSorted.map((g) => (
+            <button
+              key={g.id}
+              className={`launcher-ctx-item ${groupKeyOf(menuItem) === g.id ? "active" : ""}`}
+              onClick={() => moveItem(menuItem.id, g.id)}
+            >
+              {g.name}
+            </button>
+          ))}
+          <div className="launcher-ctx-sep" />
+          <button className="launcher-ctx-item danger" onClick={() => removeItem(menuItem.id)}>
+            移除
+          </button>
+        </div>
+      )}
     </div>
   );
 }

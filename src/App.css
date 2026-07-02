@@ -4347,116 +4347,268 @@ body:has(.drawer-window) #root {
   max-width: 460px;
 }
 
-.launcher-list {
-  max-height: 320px;
+.launcher-scroll {
+  max-height: 460px;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   padding: 2px;
   margin: 0 -2px;
 }
 
-.launcher-list::-webkit-scrollbar {
+.launcher-scroll::-webkit-scrollbar {
   width: 8px;
 }
 
-.launcher-list::-webkit-scrollbar-thumb {
+.launcher-scroll::-webkit-scrollbar-thumb {
   background: rgba(76, 96, 130, 0.25);
   border-radius: 4px;
 }
 
-.launcher-item {
+.launcher-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.launcher-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.launcher-group-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.launcher-group-name {
   border: none;
-  border-radius: 10px;
   background: transparent;
-  cursor: pointer;
-  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  cursor: text;
+  padding: 2px 6px;
+  border-radius: 6px;
+  letter-spacing: 0.02em;
   transition: background 0.12s ease;
 }
 
-.launcher-item:hover {
-  background: rgba(255, 255, 255, 0.7);
-}
-
-.launcher-item-icon {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
+.launcher-group-name:hover {
   background: rgba(255, 255, 255, 0.6);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-card);
 }
 
-.launcher-item-text {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  overflow: hidden;
-}
-
-.launcher-item-name {
-  font-size: 13px;
-  font-weight: 600;
+.launcher-group-name-input {
+  border: 1px solid var(--accent-color);
+  background: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  font-weight: 700;
   color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.launcher-item-path {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: 'Consolas', 'Segoe UI', monospace;
-}
-
-.launcher-item-del {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
+  padding: 2px 6px;
   border-radius: 6px;
+  outline: none;
+  width: 160px;
+  font-family: inherit;
+}
+
+.launcher-group-del {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-tertiary);
-  font-size: 16px;
-  line-height: 1;
   opacity: 0;
   transition: all 0.12s ease;
-  cursor: pointer;
 }
 
-.launcher-item:hover .launcher-item-del {
+.launcher-group-header:hover .launcher-group-del {
   opacity: 1;
 }
 
-.launcher-item-del:hover {
+.launcher-group-del:hover {
   background: rgba(255, 107, 107, 0.15);
   color: #e0526a;
 }
 
+.launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 4px 6px;
+}
+
+.launcher-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px 8px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.1s ease;
+}
+
+.launcher-tile:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.launcher-tile:active {
+  transform: scale(0.94);
+}
+
+.launcher-tile-icon {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-card);
+  box-shadow: 0 2px 6px rgba(33, 48, 75, 0.08);
+}
+
+.launcher-tile-icon[data-type="app"] {
+  background: linear-gradient(145deg, rgba(96, 165, 250, 0.18), rgba(255, 255, 255, 0.7));
+  color: #2f6fd6;
+}
+
+.launcher-tile-icon[data-type="folder"],
+.launcher-tile-icon[data-type="dir"] {
+  background: linear-gradient(145deg, rgba(255, 206, 112, 0.22), rgba(255, 255, 255, 0.7));
+  color: #c8881f;
+}
+
+.launcher-tile-img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+.launcher-tile-label {
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
+  color: var(--text-secondary);
+  max-width: 76px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+.launcher-add-group {
+  align-self: flex-start;
+  border: 1px dashed var(--border-card);
+  background: rgba(255, 255, 255, 0.35);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.launcher-add-group:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background: rgba(255, 255, 255, 0.7);
+}
+
 .launcher-empty {
-  padding: 24px 12px;
+  grid-column: 1 / -1;
+  padding: 20px 12px;
   text-align: center;
   font-size: 12px;
   color: var(--text-tertiary);
 }
 
+.launcher-empty-hero {
+  padding: 14px 12px;
+}
+
 .drawer-panel.dragover {
   border-color: var(--accent-color);
   box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.4), var(--shadow-glass);
+}
+
+.launcher-ctx {
+  position: fixed;
+  z-index: 9999;
+  min-width: 160px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(248, 251, 255, 0.98);
+  border: var(--border-glass);
+  box-shadow: var(--shadow-glass);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.launcher-ctx-title {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 4px 8px 6px;
+  letter-spacing: 0.02em;
+}
+
+.launcher-ctx-item {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+  font-family: inherit;
+}
+
+.launcher-ctx-item:hover {
+  background: rgba(96, 165, 250, 0.16);
+}
+
+.launcher-ctx-item.active {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
+.launcher-ctx-item.active:hover {
+  background: transparent;
+}
+
+.launcher-ctx-item.danger {
+  color: #e0526a;
+}
+
+.launcher-ctx-item.danger:hover {
+  background: rgba(255, 107, 107, 0.14);
+}
+
+.launcher-ctx-sep {
+  height: 1px;
+  background: var(--border-card);
+  margin: 4px 6px;
 }
 
 .settings-cancel-btn {

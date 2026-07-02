@@ -15,7 +15,7 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, Modifiers, ShortcutState};
 
 /// 将物理像素 RGBA 编码为 PNG 字节（无压缩，优先速度；本地传输不在乎体积）
-fn rgba_to_png_bytes(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+pub(crate) fn rgba_to_png_bytes(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
     use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     use image::ImageEncoder;
     let mut buffer = Vec::with_capacity(rgba.len() + 1024);
@@ -571,7 +571,7 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     Ok(output)
 }
 
-fn encode_base64(input: &[u8]) -> String {
+pub(crate) fn encode_base64(input: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity((input.len() + 2) / 3 * 4);
     let mut index = 0;
@@ -2970,9 +2970,8 @@ pub fn run() {
             open_tool_from_drawer,
             resize_drawer_to_content,
             launcher::launcher_load,
+            launcher::launcher_save,
             launcher::launcher_add_paths,
-            launcher::launcher_remove,
-            launcher::launcher_update,
             launcher::launcher_launch,
             launcher::launcher_open_external,
             launcher::launcher_list_dir,
