@@ -23,9 +23,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DispatchMessageW, GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect,
-    IsWindow, IsWindowVisible, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TrackPopupMenu, TranslateMessage, CREATESTRUCTW, IDC_ARROW, MSG, WNDCLASSEXW,
+    IsWindow, IsWindowVisible, LoadCursorW, MessageBoxW, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, TrackPopupMenu, TranslateMessage, CREATESTRUCTW, IDC_ARROW, MSG, WNDCLASSEXW,
 };
 
 use crate::MonitorInfo;
@@ -52,6 +52,10 @@ const TPM_TOPALIGN: u32 = 0x0000;
 const TPM_RETURNCMD: u32 = 0x0100;
 const VK_ESCAPE: i32 = 0x1B;
 const VK_RETURN: i32 = 0x0D;
+const VK_O: i32 = 0x4F;
+const MB_ICONINFORMATION: u32 = 0x0000_0040;
+const MB_ICONERROR: u32 = 0x0000_0010;
+const MB_OK: u32 = 0x0000_0000;
 const SRCCOPY: u32 = 0x00CC_0020;
 const PS_SOLID: i32 = 0;
 const TRANSPARENT: i32 = 1;
@@ -494,6 +498,7 @@ struct OverlayState {
     has_cursor: bool,
     buttons: Vec<(RECT, &'static str)>,
     hover_btn: i32,
+    ocr_busy: bool,
     was_main_visible: bool,
     skip_restore_sidebar: bool,
     last_paint: Instant,
@@ -509,7 +514,7 @@ impl OverlayState {
         const BW: i32 = 64;
         const BH: i32 = 32;
         const GAP: i32 = 6;
-        let labels: [&'static str; 4] = ["复制", "保存", "钉图", "取消"];
+        let labels: [&'static str; 5] = ["复制", "保存", "钉图", "OCR", "取消"];
         let n = labels.len() as i32;
         let total = n * BW + (n - 1) * GAP;
         let mut tx = sel.right - total;
@@ -632,9 +637,14 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
                     "复制" => "copy",
                     "保存" => "save",
                     "钉图" => "pin",
+                    "OCR" => "ocr",
                     "取消" => "cancel",
                     _ => "",
                 };
+                // OCR 进行中时禁用所有按钮（与 copy/save/pin 一致的禁用语义）
+                if st.ocr_busy {
+                    return 0;
+                }
                 perform_action(state_ptr, action);
                 return 0;
             }
@@ -696,6 +706,8 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpa
                 perform_action(state_ptr, "cancel");
             } else if vk == VK_RETURN {
                 perform_action(state_ptr, "copy");
+            } else if vk == VK_O {
+                perform_action(state_ptr, "ocr");
             }
             return 0;
         }
@@ -885,7 +897,77 @@ unsafe fn perform_action(state_ptr: *mut OverlayState, action: &str) {
             st.skip_restore_sidebar = true;
             let _ = PostMessageW(st.hwnd, WM_CLOSE, 0, 0);
         }
+        "ocr" => {
+            if st.ocr_busy {
+                return;
+            }
+            if let Some(sel) = st.selection {
+                if (sel.right - sel.left) >= 4 && (sel.bottom - sel.top) >= 4 {
+                    if let Ok(cropped) = crop_selection(&st.captures, st.vx, st.vy, sel) {
+                        let count = (cropped.width as usize) * (cropped.height as usize);
+                        let rgba = bgra_to_rgba(cropped.bits, count);
+                        let app = st.app.clone();
+                        let hwnd_raw = st.hwnd as isize;
+                        let w = cropped.width as u32;
+                        let h = cropped.height as u32;
+                        st.ocr_busy = true;
+                        // OCR 按钮文字改为"识别中"并立即重绘
+                        st.recompute_buttons();
+                        if let Some(idx) = st.buttons.iter().position(|(_, l)| *l == "OCR") {
+                            st.buttons[idx].1 = "识别中";
+                        }
+                        let _ = InvalidateRect(st.hwnd, std::ptr::null(), 0);
+                        std::thread::spawn(move || {
+                            let result = crate::platform::ocr::run_ocr(&rgba, w, h);
+                            let hwnd = hwnd_raw as *mut c_void as HWND;
+                            unsafe {
+                                // 先隐藏 overlay，避免 MessageBox 被遮挡
+                                let _ = ShowWindow(hwnd, SW_HIDE);
+                            }
+                            match result {
+                                Ok(out) => {
+                                    use tauri_plugin_clipboard_manager::ClipboardExt;
+                                    let _ = app.clipboard().write_text(&out.text);
+                                    let body = if out.text.is_empty() {
+                                        "未识别到文本".to_string()
+                                    } else {
+                                        format!("已复制到剪贴板：\n\n{}", out.text)
+                                    };
+                                    show_message_box(&body, "OCR 识别结果", false);
+                                }
+                                Err(e) => {
+                                    show_message_box(
+                                        &format!("OCR 失败: {}", e),
+                                        "OCR 错误",
+                                        true,
+                                    );
+                                }
+                            }
+                            unsafe {
+                                let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                            }
+                        });
+                        return;
+                    }
+                }
+            }
+            let _ = PostMessageW(st.hwnd, WM_CLOSE, 0, 0);
+        }
         _ => {}
+    }
+}
+
+/// 弹出模态消息框（在 OCR 工作线程中调用，不阻塞 overlay 消息循环）。
+fn show_message_box(text: &str, title: &str, is_error: bool) {
+    unsafe {
+        let text_w = wide_vec(text);
+        let title_w = wide_vec(title);
+        let flags = if is_error {
+            MB_ICONERROR | MB_OK
+        } else {
+            MB_ICONINFORMATION | MB_OK
+        };
+        MessageBoxW(std::ptr::null_mut(), text_w.as_ptr(), title_w.as_ptr(), flags);
     }
 }
 
@@ -1293,6 +1375,7 @@ pub fn start_native_screenshot(app: tauri::AppHandle, monitors: Vec<MonitorInfo>
                 has_cursor: false,
                 buttons: Vec::new(),
                 hover_btn: -1,
+                ocr_busy: false,
                 was_main_visible,
                 skip_restore_sidebar: false,
                 last_paint: Instant::now(),

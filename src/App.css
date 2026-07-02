@@ -7636,6 +7636,116 @@ body:has(.drawer-window) #root {
   cursor: not-allowed;
 }
 
+.screenshot-ocr-box {
+  position: absolute;
+  border: 1.5px solid rgba(59, 200, 255, 0.85);
+  background: rgba(59, 200, 255, 0.12);
+  pointer-events: none;
+  z-index: 15;
+  box-sizing: border-box;
+}
+
+.screenshot-ocr-panel {
+  position: absolute;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  max-height: 230px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(20, 22, 28, 0.95);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  pointer-events: auto;
+}
+
+.screenshot-ocr-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 6px;
+}
+
+.screenshot-ocr-close {
+  width: 20px;
+  height: 20px;
+  line-height: 18px;
+  text-align: center;
+  padding: 0;
+  font-size: 14px;
+  color: #fff;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.screenshot-ocr-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.screenshot-ocr-text {
+  flex: 1;
+  width: 100%;
+  min-height: 80px;
+  resize: none;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.screenshot-ocr-text:focus {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.8);
+}
+
+.screenshot-ocr-panel-footer {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.screenshot-ocr-panel-footer button {
+  flex: 1;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.screenshot-ocr-panel-footer button:hover {
+  background: rgba(59, 130, 246, 0.85);
+  border-color: rgba(59, 130, 246, 0.9);
+}
+
+.screenshot-ocr-panel-hint {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: center;
+  padding: 10px 0;
+}
+
+.screenshot-ocr-error {
+  font-size: 12px;
+  color: #ff8a8a;
+  padding: 6px 8px;
+  background: rgba(255, 80, 80, 0.12);
+  border-radius: 6px;
+  word-break: break-all;
+}
+
 .screenshot-monitor-switch {
   position: absolute;
   top: 12px;

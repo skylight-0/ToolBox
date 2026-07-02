@@ -7,6 +7,9 @@ pub mod screenshot;
 #[cfg(target_os = "windows")]
 pub mod screenshot_native;
 
+#[cfg(target_os = "windows")]
+pub mod ocr;
+
 #[cfg(not(target_os = "windows"))]
 pub mod screenshot {
     pub struct MonitorRect {
@@ -24,6 +27,14 @@ pub mod screenshot {
 
     pub fn capture_screens(_monitors: &[MonitorRect]) -> Result<Vec<CaptureOutput>, String> {
         Err("截图仅支持 Windows 平台".to_string())
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub mod ocr {
+    use crate::OcrOutput;
+    pub fn run_ocr(_rgba: &[u8], _width: u32, _height: u32) -> Result<OcrOutput, String> {
+        Err("OCR 仅支持 Windows 平台".to_string())
     }
 }
 
