@@ -40,7 +40,6 @@ const CS_VREDRAW: u32 = 0x0001;
 const CS_DBLCLKS: u32 = 0x0008;
 const SW_HIDE: i32 = 0;
 const SW_SHOW: i32 = 5;
-const SW_SHOWNA: i32 = 8;
 const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
 const SWP_NOZORDER: u32 = 0x0004;
@@ -362,8 +361,6 @@ struct GdiBuffers {
     dim_bmp: HBITMAP,
     dim_old: HGDIOBJ,
     font: HFONT,
-    vw: i32,
-    vh: i32,
 }
 
 impl Drop for GdiBuffers {
@@ -433,8 +430,6 @@ unsafe fn build_buffers(captures: &[NativeCapture], vx: i32, vy: i32, vw: i32, v
         dim_bmp,
         dim_old,
         font,
-        vw,
-        vh,
     })
 }
 
@@ -1440,17 +1435,6 @@ pub fn focus_overlay() {
         unsafe {
             let hwnd = h as *mut c_void as HWND;
             let _ = SetForegroundWindow(hwnd);
-        }
-    }
-}
-
-/// 取消截图：向 overlay 窗口发送 WM_CLOSE。
-pub fn cancel_native_screenshot() {
-    let h = read_overlay_hwnd();
-    if h != 0 {
-        unsafe {
-            let hwnd = h as *mut c_void as HWND;
-            let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
         }
     }
 }
