@@ -8,6 +8,7 @@ import ScreenshotOverlay from "./features/screenshot/ScreenshotOverlay";
 import PinWindow from "./features/screenshot/PinWindow";
 import PinMenuWindow from "./features/screenshot/PinMenuWindow";
 import TestWindow from "./features/screenshot/TestWindow";
+import DrawerWindow from "./features/drawer/DrawerWindow";
 
 const hash = window.location.hash.toLowerCase();
 const View: React.ReactNode =
@@ -17,6 +18,7 @@ const View: React.ReactNode =
   hash === "#pin" ? <PinWindow /> :
   hash === "#pin-menu" ? <PinMenuWindow /> :
   hash === "#test" ? <TestWindow /> :
+  hash === "#drawer" ? <DrawerWindow /> :
   <App />;
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

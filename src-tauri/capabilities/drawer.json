@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "drawer-capability",
+  "description": "Capability for the dropdown drawer window invoked by Alt+Q",
+  "windows": ["drawer"],
+  "permissions": [
+    "core:default",
+    "store:default"
+  ]
+}

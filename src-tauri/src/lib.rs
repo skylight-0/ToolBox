@@ -87,6 +87,7 @@ struct ApplyScreenshotAction {
 }
 
 mod platform;
+mod launcher;
 
 pub(crate) struct AppState {
     sidebar_width: Mutex<u32>,
@@ -1718,6 +1719,108 @@ fn resize_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>, widt
     position_window_right(&window, clamped_width);
 }
 
+// 防止键盘自动重复导致抽屉快速来回切换的防抖时间戳
+static LAST_DRAWER_TOGGLE: std::sync::OnceLock<Mutex<Option<Instant>>> = std::sync::OnceLock::new();
+const DRAWER_TOGGLE_DEBOUNCE: Duration = Duration::from_millis(450);
+
+// 将抽屉窗口定位到光标所在显示器的顶部，宽度撑满工作区
+fn position_drawer_window(window: &tauri::WebviewWindow) {
+    let drawer_height = 380.0;
+    if let Some(monitor) = resolve_target_monitor(window) {
+        let scale_factor = monitor.scale_factor();
+        let work_area = monitor.work_area();
+        let work_size = work_area.size.to_logical::<f64>(scale_factor);
+        let work_pos = work_area.position.to_logical::<f64>(scale_factor);
+        let width = work_size.width;
+        let x = work_pos.x;
+        let y = work_pos.y;
+        let _ = window.set_size(Size::Logical(LogicalSize::new(width, drawer_height)));
+        let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
+    }
+}
+
+// 前端量好面板实际尺寸后调用：把抽屉窗口收缩到正好包住面板并水平居中于工作区顶部
+#[tauri::command]
+fn resize_drawer_to_content(app: tauri::AppHandle, width: f64, height: f64) {
+    let Some(window) = app.get_webview_window("drawer") else {
+        return;
+    };
+    if let Some(monitor) = resolve_target_monitor(&window) {
+        let scale_factor = monitor.scale_factor();
+        let work_area = monitor.work_area();
+        let work_size = work_area.size.to_logical::<f64>(scale_factor);
+        let work_pos = work_area.position.to_logical::<f64>(scale_factor);
+        let work_width = work_size.width;
+        let clamped_width = width.min(work_width);
+        let x = work_pos.x + (work_width - clamped_width).max(0.0) / 2.0;
+        let y = work_pos.y;
+        let _ = window.set_size(Size::Logical(LogicalSize::new(clamped_width, height)));
+        let _ = window.set_position(Position::Logical(LogicalPosition::new(x, y)));
+    }
+}
+
+// 切换抽屉窗口显示/隐藏（全局快捷键 Alt+Q 触发）
+fn toggle_drawer_window(app_handle: &tauri::AppHandle) {
+    // 防抖：键盘自动重复会在同一秒内触发多次，忽略 450ms 内的重复触发
+    let last_cell = LAST_DRAWER_TOGGLE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = last_cell.lock() {
+        if let Some(last) = *guard {
+            if last.elapsed() < DRAWER_TOGGLE_DEBOUNCE {
+                log::info!("[drawer] 防抖忽略重复触发");
+                return;
+            }
+        }
+        *guard = Some(Instant::now());
+    }
+
+    let window = match app_handle.get_webview_window("drawer") {
+        Some(window) => window,
+        None => {
+            log::error!("[drawer] 未找到 drawer 窗口");
+            return;
+        }
+    };
+
+    let visible = window.is_visible().unwrap_or(false);
+    log::info!("[drawer] toggle, 当前 visible={}", visible);
+
+    if visible {
+        // 已可见时，通知前端播放收起动画，动画结束后由前端调用 hide_drawer
+        match app_handle.emit("toggle-drawer", ()) {
+            Ok(_) => log::info!("[drawer] 已发送 toggle-drawer (关闭) 事件"),
+            Err(e) => log::error!("[drawer] 发送 toggle-drawer 事件失败: {}", e),
+        }
+    } else {
+        position_drawer_window(&window);
+        let _ = window.show();
+        let _ = window.set_focus();
+        // 使用 app_handle 广播事件，确保 drawer 窗口的前端一定能收到
+        match app_handle.emit("toggle-drawer", ()) {
+            Ok(_) => log::info!("[drawer] 已发送 toggle-drawer (打开) 事件"),
+            Err(e) => log::error!("[drawer] 发送 toggle-drawer 事件失败: {}", e),
+        }
+    }
+}
+
+// 前端收起动画结束后调用，真正隐藏抽屉窗口
+#[tauri::command]
+fn hide_drawer(window: tauri::WebviewWindow) {
+    let _ = window.hide();
+}
+
+// 从抽屉中打开工具：隐藏抽屉、显示主侧边栏、通知主窗口切换视图
+#[tauri::command]
+fn open_tool_from_drawer(app: tauri::AppHandle, tool_id: String) {
+    if let Some(drawer) = app.get_webview_window("drawer") {
+        let _ = drawer.emit("toggle-drawer", ());
+    }
+    let state: State<'_, AppState> = app.state();
+    show_sidebar_window(&app, &state);
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.emit("open-tool", tool_id);
+    }
+}
+
 fn chrono_like_timestamp() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2699,6 +2802,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_store::Builder::new().build())
         .register_uri_scheme_protocol("screenshot-frame", |ctx, request| {
             // 直接返回当前活动屏的原始 RGBA 字节，跳过 PNG 编码
             // 前端用 putImageData 绘制，省去编/解码全流程
@@ -2802,6 +2906,12 @@ pub fn run() {
                             }
                         }
                     }
+                    if event.state == ShortcutState::Pressed
+                        && shortcut.matches(Modifiers::ALT, Code::KeyQ)
+                    {
+                        log::info!("全局快捷键 Alt+Q 已触发");
+                        toggle_drawer_window(app);
+                    }
                 })
                 .build(),
         )
@@ -2855,7 +2965,19 @@ pub fn run() {
             pin_menu_action,
             get_pending_pin_menu,
             get_screenshot_shortcut_enabled,
-            set_screenshot_shortcut_enabled
+            set_screenshot_shortcut_enabled,
+            hide_drawer,
+            open_tool_from_drawer,
+            resize_drawer_to_content,
+            launcher::launcher_load,
+            launcher::launcher_add_paths,
+            launcher::launcher_remove,
+            launcher::launcher_update,
+            launcher::launcher_launch,
+            launcher::launcher_open_external,
+            launcher::launcher_list_dir,
+            launcher::launcher_get_default_open_mode,
+            launcher::launcher_set_default_open_mode
         ])
         .setup(|app| {
             let app_data_dir = app
@@ -2897,6 +3019,34 @@ pub fn run() {
                         emit_app_notification(app, &record);
                     }
                 }
+            }
+
+            // 注册下拉抽屉快捷键 Alt+Q
+            if let Err(error) = app.global_shortcut().register("Alt+Q") {
+                log::error!("注册全局快捷键 Alt+Q 失败: {}", error);
+            }
+
+            // 预创建下拉抽屉窗口（隐藏），Alt+Q 唤出从桌面顶部下滑
+            if app.get_webview_window("drawer").is_none() {
+                let drawer_window = WebviewWindowBuilder::new(
+                    app,
+                    "drawer",
+                    WebviewUrl::App("/#drawer".into()),
+                )
+                .title("抽屉")
+                .inner_size(1200.0, 380.0)
+                .position(0.0, 0.0)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .resizable(false)
+                .shadow(false)
+                .focused(true)
+                .visible(false)
+                .build()
+                .map_err(|error| format!("预创建抽屉窗口失败: {}", error))?;
+                let _ = drawer_window.hide();
             }
 
             // 注册截图快捷键 Ctrl+Shift+A（受设置项控制，默认开启）

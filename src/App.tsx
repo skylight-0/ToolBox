@@ -428,6 +428,16 @@ function App() {
   }, [isCommandPaletteOpen]);
 
   useEffect(() => {
+    const unlistenOpenTool = listen<string>("open-tool", (event) => {
+      const toolId = event.payload as ToolId;
+      void handleToolClick(toolId);
+    });
+    return () => {
+      unlistenOpenTool.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && isCommandPaletteOpenRef.current) {
         event.preventDefault();
