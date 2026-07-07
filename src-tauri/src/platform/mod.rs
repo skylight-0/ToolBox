@@ -7,6 +7,8 @@ pub mod screenshot_native;
 #[cfg(target_os = "windows")]
 pub mod ocr;
 
+pub mod translate;
+
 #[cfg(not(target_os = "windows"))]
 pub mod ocr {
     use crate::OcrOutput;

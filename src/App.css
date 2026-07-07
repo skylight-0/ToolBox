@@ -6189,6 +6189,39 @@ body:has(.drawer-window) #root {
   accent-color: var(--accent-color);
 }
 
+.app-settings-text-input {
+  width: 100%;
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: #f8fafc;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  user-select: text;
+}
+
+.app-settings-text-input:focus {
+  border-color: rgba(37, 99, 235, 0.45);
+  background: #fff;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.app-settings-select {
+  width: 100%;
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: #f8fafc;
+  outline: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
 .app-settings-error {
   padding: 10px 12px;
   background: rgba(254, 242, 242, 0.92);
@@ -7652,7 +7685,7 @@ body:has(.drawer-window) #root {
   flex-direction: column;
   width: 320px;
   max-height: 230px;
-  padding: 8px 10px;
+  padding: 10px;
   border-radius: 8px;
   background: rgba(20, 22, 28, 0.95);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
@@ -7672,8 +7705,6 @@ body:has(.drawer-window) #root {
 .screenshot-ocr-close {
   width: 20px;
   height: 20px;
-  line-height: 18px;
-  text-align: center;
   padding: 0;
   font-size: 14px;
   color: #fff;
@@ -7681,6 +7712,9 @@ body:has(.drawer-window) #root {
   border: none;
   border-radius: 4px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .screenshot-ocr-close:hover {
@@ -7716,13 +7750,18 @@ body:has(.drawer-window) #root {
 
 .screenshot-ocr-panel-footer button {
   flex: 1;
-  padding: 5px 10px;
+  min-height: 30px;
+  padding: 0 10px;
   font-size: 12px;
+  line-height: 1;
   color: #fff;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .screenshot-ocr-panel-footer button:hover {

@@ -49,11 +49,26 @@ function SettingsView({
   const [settingsError, setSettingsError] = useState("");
   const [draggingToolId, setDraggingToolId] = useState<ToolId | null>(null);
 
+  const [translateAzureKey, setTranslateAzureKey] = useState("");
+  const [translateAzureRegion, setTranslateAzureRegion] = useState("");
+  const [translateTargetLang, setTranslateTargetLang] = useState("zh-Hans");
+  const [isSavingTranslate, setIsSavingTranslate] = useState(false);
+  const [translateStatus, setTranslateStatus] = useState("");
+
   useEffect(() => {
     invoke<boolean>("get_autostart_enabled")
       .then(setAutostartEnabled)
       .catch((error) => setSettingsError(String(error)))
       .finally(() => setIsLoadingAutostart(false));
+    invoke<{ azureKey: string; azureRegion: string; targetLang: string }>(
+      "get_translate_settings"
+    )
+      .then((settings) => {
+        setTranslateAzureKey(settings.azureKey);
+        setTranslateAzureRegion(settings.azureRegion);
+        setTranslateTargetLang(settings.targetLang || "zh-Hans");
+      })
+      .catch((error) => setSettingsError(String(error)));
   }, []);
 
   const updateAutostart = async (enabled: boolean) => {
@@ -100,6 +115,25 @@ function SettingsView({
 
   const updateSidebarWidth = (width: number) => {
     onSidebarWidthChange(width);
+  };
+
+  const saveTranslateSettings = async () => {
+    setSettingsError("");
+    setTranslateStatus("");
+    setIsSavingTranslate(true);
+    try {
+      await invoke("set_translate_settings", {
+        azureKey: translateAzureKey.trim(),
+        azureRegion: translateAzureRegion.trim(),
+        targetLang: translateTargetLang.trim() || "zh-Hans",
+      });
+      setTranslateStatus("已保存");
+      setTimeout(() => setTranslateStatus(""), 2000);
+    } catch (error) {
+      setSettingsError(String(error));
+    } finally {
+      setIsSavingTranslate(false);
+    }
   };
 
   const moveTool = (toolId: ToolId, direction: -1 | 1) => {
@@ -185,6 +219,76 @@ function SettingsView({
               onChange={(event) => void updatePasswordRequireAuth(event.target.checked)}
             />
           </label>
+        </section>
+
+        <section className="app-settings-section">
+          <div className="app-settings-section-header">
+            <h3>OCR 翻译</h3>
+          </div>
+          <div className="app-settings-field">
+            <div className="app-settings-row-title">Azure 密钥 (Subscription Key)</div>
+            <div className="app-settings-row-description">
+              在 Azure Portal 创建「Translator」资源后获取，免费额度 200 万字符/月
+            </div>
+            <input
+              type="password"
+              className="app-settings-text-input"
+              value={translateAzureKey}
+              onChange={(event) => setTranslateAzureKey(event.target.value)}
+              placeholder="例如 1a2b3c4d5e6f7g8h9i0j..."
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="app-settings-field">
+            <div className="app-settings-row-title">Azure 区域 (Region)</div>
+            <div className="app-settings-row-description">
+              资源所在区域的短标识，如 eastasia、southeastasia、global
+            </div>
+            <input
+              type="text"
+              className="app-settings-text-input"
+              value={translateAzureRegion}
+              onChange={(event) => setTranslateAzureRegion(event.target.value)}
+              placeholder="例如 eastasia"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="app-settings-field">
+            <div className="app-settings-row-title">目标语言</div>
+            <div className="app-settings-row-description">
+              BCP-47 语言代码，识别后翻译到此语言
+            </div>
+            <select
+              className="app-settings-select"
+              value={translateTargetLang}
+              onChange={(event) => setTranslateTargetLang(event.target.value)}
+            >
+              <option value="zh-Hans">简体中文</option>
+              <option value="zh-Hant">繁体中文</option>
+              <option value="en">英语</option>
+              <option value="ja">日语</option>
+              <option value="ko">韩语</option>
+              <option value="fr">法语</option>
+              <option value="de">德语</option>
+              <option value="ru">俄语</option>
+              <option value="es">西班牙语</option>
+            </select>
+          </div>
+          <div className="app-settings-field">
+            <button
+              className="format-btn"
+              type="button"
+              disabled={isSavingTranslate}
+              onClick={() => void saveTranslateSettings()}
+            >
+              {isSavingTranslate ? "保存中…" : "保存翻译配置"}
+            </button>
+            {translateStatus && (
+              <div className="app-settings-row-description">{translateStatus}</div>
+            )}
+          </div>
         </section>
 
         <section className="app-settings-section">

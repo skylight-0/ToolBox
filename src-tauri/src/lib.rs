@@ -2313,6 +2313,111 @@ fn set_screenshot_shortcut_enabled(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// OCR 翻译（Azure Text Translation）
+// ---------------------------------------------------------------------------
+
+const TRANSLATE_AZURE_KEY_SETTING: &str = "translate_azure_key";
+const TRANSLATE_AZURE_REGION_SETTING: &str = "translate_azure_region";
+const TRANSLATE_TARGET_LANG_SETTING: &str = "translate_target_lang";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranslateSettings {
+    azure_key: String,
+    azure_region: String,
+    target_lang: String,
+}
+
+fn read_translate_settings(state: &State<'_, AppState>) -> Result<TranslateSettings, String> {
+    let connection = open_clipboard_db(state)?;
+    let azure_key = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            params![TRANSLATE_AZURE_KEY_SETTING],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("读取翻译设置失败: {}", error))?
+        .unwrap_or_default();
+    let azure_region = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            params![TRANSLATE_AZURE_REGION_SETTING],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("读取翻译设置失败: {}", error))?
+        .unwrap_or_default();
+    let target_lang = connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            params![TRANSLATE_TARGET_LANG_SETTING],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("读取翻译设置失败: {}", error))?
+        .unwrap_or_else(|| "zh-Hans".to_string());
+    Ok(TranslateSettings {
+        azure_key,
+        azure_region,
+        target_lang,
+    })
+}
+
+#[tauri::command]
+fn get_translate_settings(state: State<'_, AppState>) -> Result<TranslateSettings, String> {
+    read_translate_settings(&state)
+}
+
+#[tauri::command]
+fn set_translate_settings(
+    state: State<'_, AppState>,
+    azure_key: String,
+    azure_region: String,
+    target_lang: String,
+) -> Result<(), String> {
+    let connection = open_clipboard_db(&state)?;
+    connection
+        .execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![TRANSLATE_AZURE_KEY_SETTING, azure_key],
+        )
+        .map_err(|error| format!("保存翻译设置失败: {}", error))?;
+    connection
+        .execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![TRANSLATE_AZURE_REGION_SETTING, azure_region],
+        )
+        .map_err(|error| format!("保存翻译设置失败: {}", error))?;
+    connection
+        .execute(
+            "INSERT INTO app_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![TRANSLATE_TARGET_LANG_SETTING, target_lang],
+        )
+        .map_err(|error| format!("保存翻译设置失败: {}", error))?;
+    Ok(())
+}
+
+/// 供截图 OCR 结果窗口内部调用：从当前 settings 读取配置并翻译。
+/// 不暴露给前端，避免密钥经过前端。
+pub(crate) fn translate_with_app_settings(
+    app: &tauri::AppHandle,
+    text: &str,
+) -> Result<String, String> {
+    let state: State<'_, AppState> = app.state();
+    let settings = read_translate_settings(&state)?;
+    let config = platform::translate::TranslateConfig {
+        azure_key: settings.azure_key,
+        azure_region: settings.azure_region,
+        target_lang: settings.target_lang,
+    };
+    platform::translate::translate(text, &config)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2439,6 +2544,8 @@ pub fn run() {
             start_screenshot,
             get_screenshot_shortcut_enabled,
             set_screenshot_shortcut_enabled,
+            get_translate_settings,
+            set_translate_settings,
             hide_drawer,
             open_tool_from_drawer,
             resize_drawer_to_content,

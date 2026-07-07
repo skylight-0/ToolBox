@@ -14,19 +14,36 @@ use windows_sys::core::PCWSTR;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     AlphaBlend, BeginPaint, BitBlt, ClientToScreen, CreateCompatibleDC, CreateDIBSection,
-    CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint, FillRect,
-    GetDC, GetTextExtentPoint32W, InvalidateRect, LineTo, MoveToEx, ReleaseDC, SelectObject,
-    SetBkMode, SetStretchBltMode, SetTextColor, StretchBlt, TextOutW, UpdateWindow,
-    BLENDFUNCTION, BITMAPINFO, BITMAPINFOHEADER, HBITMAP, HFONT, HGDIOBJ, HDC, PAINTSTRUCT,
+    CreateFontW, CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint,
+    FillRect, GetDC, GetTextExtentPoint32W, InvalidateRect, LineTo, MoveToEx, RoundRect,
+    ReleaseDC, SelectObject, SetBkMode, SetStretchBltMode, SetTextColor, StretchBlt, TextOutW,
+    UpdateWindow, BLENDFUNCTION, BITMAPINFO, BITMAPINFOHEADER, HBRUSH, HBITMAP, HFONT, HGDIOBJ,
+    HDC, PAINTSTRUCT,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DispatchMessageW, GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect,
-    IsWindow, IsWindowVisible, LoadCursorW, MessageBoxW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TrackPopupMenu, TranslateMessage, CREATESTRUCTW, IDC_ARROW, MSG, WNDCLASSEXW,
+    DispatchMessageW, GetClientRect, GetCursorPos, GetMessageW, GetSystemMetrics,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextW, IsWindow, IsWindowVisible, LoadCursorW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetCursor,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+    TrackPopupMenu, TranslateMessage, CREATESTRUCTW, IDC_ARROW, MSG, WNDCLASSEXW,
 };
+
+/// 自定义 DRAWITEMSTRUCT（避免启用 Win32_UI_Controls feature），布局与 Win32 一致。
+#[repr(C)]
+#[allow(non_snake_case)]
+struct DRAWITEMSTRUCT {
+    CtlType: u32,
+    CtlID: u32,
+    itemID: u32,
+    itemAction: u32,
+    itemState: u32,
+    hwndItem: HWND,
+    hDC: HDC,
+    rcItem: RECT,
+    itemData: usize,
+}
 
 use crate::MonitorInfo;
 
@@ -52,9 +69,6 @@ const TPM_RETURNCMD: u32 = 0x0100;
 const VK_ESCAPE: i32 = 0x1B;
 const VK_RETURN: i32 = 0x0D;
 const VK_O: i32 = 0x4F;
-const MB_ICONINFORMATION: u32 = 0x0000_0040;
-const MB_ICONERROR: u32 = 0x0000_0010;
-const MB_OK: u32 = 0x0000_0000;
 const SRCCOPY: u32 = 0x00CC_0020;
 const PS_SOLID: i32 = 0;
 const TRANSPARENT: i32 = 1;
@@ -62,9 +76,50 @@ const HALFTONE: i32 = 4;
 const AC_SRC_OVER: u8 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 
+// 子控件与标准窗口样式
+const WS_CHILD: u32 = 0x4000_0000;
+const WS_VISIBLE: u32 = 0x1000_0000;
+const WS_BORDER: u32 = 0x0080_0000;
+const WS_VSCROLL: u32 = 0x0020_0000;
+const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
+const ES_MULTILINE: u32 = 0x0004;
+const ES_AUTOVSCROLL: u32 = 0x0040;
+const ES_READONLY: u32 = 0x0800;
+const ES_WANTRETURN: u32 = 0x1000;
+const BS_OWNERDRAW: u32 = 0x000B;
+const DT_VCENTER: u32 = 0x0004;
+const DT_SINGLELINE: u32 = 0x0020;
+const ODS_SELECTED: u32 = 0x0001;
+const ODS_HOTLIGHT: u32 = 0x0040;
+const COLOR_BTNFACE: usize = 15;
+const SM_CXSCREEN: i32 = 0;
+const SM_CYSCREEN: i32 = 1;
+
+// OCR 结果窗口深色主题配色（COLORREF = 0x00BBGGRR）
+const OCR_BG: u32 = 0x00241E1C; // RGB(28,30,36)
+const OCR_EDIT_BG: u32 = 0x001C1816; // RGB(22,24,28)
+const OCR_EDIT_TEXT: u32 = 0x00F2EEEB; // RGB(235,238,242)
+const OCR_BTN_COPY: u32 = 0x00F6823B; // RGB(59,130,246)
+const OCR_BTN_COPY_H: u32 = 0x00FF914F; // 悬停
+const OCR_BTN_COPY_P: u32 = 0x00C46A30; // 按下态
+const OCR_BTN_TRANSLATE: u32 = 0x00B5660C; // RGB(12,102,181) 翻译按钮
+const OCR_BTN_TRANSLATE_H: u32 = 0x00D17E10; // 悬停
+const OCR_BTN_TRANSLATE_P: u32 = 0x008E4F08; // 按下态
+const OCR_BTN_CLOSE: u32 = 0x003E3834; // RGB(52,56,62)
+const OCR_BTN_CLOSE_H: u32 = 0x00504842; // 悬停
+const OCR_BTN_CLOSE_P: u32 = 0x00322E2B; // 按下态
+const OCR_BTN_BORDER: u32 = 0x0068605A; // 按钮边框
+const OCR_BTN_TEXT: u32 = 0x00FFFFFF;
+
 const WM_CREATE: u32 = 0x0001;
 const WM_DESTROY: u32 = 0x0002;
+const WM_SIZE: u32 = 0x0005;
+const WM_COMMAND: u32 = 0x0111;
+const WM_DRAWITEM: u32 = 0x002B;
+const WM_CTLCOLORSTATIC: u32 = 0x0138;
 const WM_PAINT: u32 = 0x000F;
+const WM_SETFONT: u32 = 0x0030;
+const EM_SETSEL: u32 = 0x00B1;
 const WM_ERASEBKGND: u32 = 0x0014;
 const WM_SETCURSOR: u32 = 0x0020;
 const WM_KEYDOWN: u32 = 0x0100;
@@ -76,6 +131,8 @@ const WM_RBUTTONUP: u32 = 0x0205;
 const WM_MOUSEWHEEL: u32 = 0x020A;
 const WM_NCCREATE: u32 = 0x0081;
 const WM_CLOSE: u32 = 0x0010;
+/// 自定义消息：后台翻译线程完成后向 OCR 结果窗口投递
+const WM_APP_TRANSLATE_DONE: u32 = 0x8000 + 1;
 
 // 钉图右键菜单命令 ID
 const MENU_COPY: usize = 1;
@@ -914,32 +971,28 @@ unsafe fn perform_action(state_ptr: *mut OverlayState, action: &str) {
                         let _ = InvalidateRect(st.hwnd, std::ptr::null(), 0);
                         std::thread::spawn(move || {
                             let result = crate::platform::ocr::run_ocr(&rgba, w, h);
-                            let hwnd = hwnd_raw as *mut c_void as HWND;
+                            // 关闭截图 overlay（WM_DESTROY 按 was_main_visible 恢复侧栏）
                             unsafe {
-                                // 先隐藏 overlay，避免 MessageBox 被遮挡
-                                let _ = ShowWindow(hwnd, SW_HIDE);
+                                let _ = PostMessageW(
+                                    hwnd_raw as *mut c_void as HWND,
+                                    WM_CLOSE,
+                                    0,
+                                    0,
+                                );
                             }
+                            // 在当前线程创建原生结果窗口并运行消息循环
                             match result {
                                 Ok(out) => {
-                                    use tauri_plugin_clipboard_manager::ClipboardExt;
-                                    let _ = app.clipboard().write_text(&out.text);
-                                    let body = if out.text.is_empty() {
+                                    let text = if out.text.is_empty() {
                                         "未识别到文本".to_string()
                                     } else {
-                                        format!("已复制到剪贴板：\n\n{}", out.text)
+                                        out.text
                                     };
-                                    show_message_box(&body, "OCR 识别结果", false);
+                                    create_ocr_result_window(app, text, false);
                                 }
                                 Err(e) => {
-                                    show_message_box(
-                                        &format!("OCR 失败: {}", e),
-                                        "OCR 错误",
-                                        true,
-                                    );
+                                    create_ocr_result_window(app, format!("OCR 失败: {}", e), true);
                                 }
-                            }
-                            unsafe {
-                                let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
                             }
                         });
                         return;
@@ -952,18 +1005,536 @@ unsafe fn perform_action(state_ptr: *mut OverlayState, action: &str) {
     }
 }
 
-/// 弹出模态消息框（在 OCR 工作线程中调用，不阻塞 overlay 消息循环）。
-fn show_message_box(text: &str, title: &str, is_error: bool) {
-    unsafe {
-        let text_w = wide_vec(text);
-        let title_w = wide_vec(title);
-        let flags = if is_error {
-            MB_ICONERROR | MB_OK
-        } else {
-            MB_ICONINFORMATION | MB_OK
-        };
-        MessageBoxW(std::ptr::null_mut(), text_w.as_ptr(), title_w.as_ptr(), flags);
+// ---------------------------------------------------------------------------
+// OCR 结果窗口（原生 Win32，内含可选中复制的 EDIT 控件）。
+// ---------------------------------------------------------------------------
+
+struct OcrResultState {
+    app: tauri::AppHandle,
+    text: String,
+    is_error: bool,
+    hwnd: HWND,
+    edit: HWND,
+    copy_btn: HWND,
+    translate_btn: HWND,
+    close_btn: HWND,
+    font: HFONT,
+    edit_brush: HBRUSH,
+    /// 是否正在翻译（用于禁用按钮、改文字）
+    translating: bool,
+    /// 是否已显示译文（用于「翻译」按钮在「译文」与「原文」之间切换）
+    showing_translation: bool,
+    /// 原文备份，便于切换回原文
+    original_text: String,
+    /// 翻译结果（成功后缓存）
+    translated_text: String,
+}
+
+/// 后台翻译线程向主线程 PostMessage 传递的结果载荷
+struct TranslateDonePayload {
+    ok: bool,
+    text: String,
+}
+
+/// 处理「翻译」按钮点击：在「翻译」「原文」之间切换；首次点击时启动后台翻译线程。
+/// 必须在主 UI 线程调用（OCR 结果窗口的消息处理中）。
+unsafe fn handle_translate_click(st: &mut OcrResultState) {
+    if st.translating {
+        return;
     }
+    // 已显示译文 → 切换回原文
+    if st.showing_translation {
+        st.text = st.original_text.clone();
+        st.showing_translation = false;
+        let text_w = wide_vec(&st.text);
+        let _ = SetWindowTextW(st.edit, text_w.as_ptr());
+        let label = wide_vec("翻译");
+        let _ = SetWindowTextW(st.translate_btn, label.as_ptr());
+        let _ = InvalidateRect(st.translate_btn, std::ptr::null(), 1);
+        return;
+    }
+    // 已有缓存的译文 → 直接显示
+    if !st.translated_text.is_empty() {
+        st.text = st.translated_text.clone();
+        st.showing_translation = true;
+        let text_w = wide_vec(&st.text);
+        let _ = SetWindowTextW(st.edit, text_w.as_ptr());
+        let label = wide_vec("原文");
+        let _ = SetWindowTextW(st.translate_btn, label.as_ptr());
+        let _ = InvalidateRect(st.translate_btn, std::ptr::null(), 1);
+        return;
+    }
+    // 首次翻译：按钮文字改为「翻译中…」，禁用期间忽略重复点击
+    st.translating = true;
+    let label = wide_vec("翻译中…");
+    let _ = SetWindowTextW(st.translate_btn, label.as_ptr());
+    let _ = InvalidateRect(st.translate_btn, std::ptr::null(), 1);
+
+    let app = st.app.clone();
+    let original = st.original_text.clone();
+    let target_hwnd_ptr = st.hwnd as usize;
+    std::thread::spawn(move || {
+        let result = crate::translate_with_app_settings(&app, &original);
+        let payload = Box::into_raw(Box::new(TranslateDonePayload {
+            ok: result.is_ok(),
+            text: result.unwrap_or_else(|e| e),
+        }));
+        // SAFETY: 仅投递消息到目标 hwnd 的消息队列，不解引用 hwnd。
+        unsafe {
+            let _ = PostMessageW(
+                target_hwnd_ptr as *const c_void as HWND,
+                WM_APP_TRANSLATE_DONE,
+                payload as usize,
+                0,
+            );
+        }
+    });
+}
+
+unsafe fn draw_ocr_button(
+    hdc: HDC,
+    rc: RECT,
+    font: HFONT,
+    label: &str,
+    bg_normal: u32,
+    bg_hot: u32,
+    bg_pressed: u32,
+    pressed: bool,
+    hot: bool,
+) {
+    let bg = if pressed {
+        bg_pressed
+    } else if hot {
+        bg_hot
+    } else {
+        bg_normal
+    };
+
+    let brush = CreateSolidBrush(bg);
+    let pen = CreatePen(PS_SOLID, 1, OCR_BTN_BORDER);
+    let old_brush = SelectObject(hdc, brush);
+    let old_pen = SelectObject(hdc, pen);
+    let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 10, 10);
+    let _ = SelectObject(hdc, old_pen);
+    let _ = SelectObject(hdc, old_brush);
+    let _ = DeleteObject(pen);
+    let _ = DeleteObject(brush);
+
+    let label_w = wide_vec(label);
+    let text_len = label_w.len().saturating_sub(1) as i32;
+    let _ = SelectObject(hdc, font);
+    let _ = SetBkMode(hdc, TRANSPARENT);
+    let _ = SetTextColor(hdc, OCR_BTN_TEXT);
+
+    let mut text_size = SIZE { cx: 0, cy: 0 };
+    let _ = GetTextExtentPoint32W(hdc, label_w.as_ptr(), text_len, &mut text_size);
+    let offset = if pressed { 1 } else { 0 };
+    let text_x = rc.left + (rc.right - rc.left - text_size.cx) / 2 + offset;
+    let text_y = rc.top + (rc.bottom - rc.top - text_size.cy) / 2 + offset;
+    let _ = TextOutW(hdc, text_x, text_y, label_w.as_ptr(), text_len);
+}
+
+unsafe fn create_ocr_result_window(app: tauri::AppHandle, text: String, is_error: bool) {
+    CLASS_REGISTER.call_once(|| {
+        register_classes();
+    });
+    window_count_inc();
+
+    let title = if is_error { "OCR 错误" } else { "OCR 识别结果" };
+    let title_w = wide_vec(title);
+    let state = Box::into_raw(Box::new(OcrResultState {
+        app,
+        text: text.clone(),
+        is_error,
+        hwnd: null_hwnd(),
+        edit: null_hwnd(),
+        copy_btn: null_hwnd(),
+        translate_btn: null_hwnd(),
+        close_btn: null_hwnd(),
+        font: std::ptr::null_mut(),
+        edit_brush: std::ptr::null_mut(),
+        translating: false,
+        showing_translation: false,
+        original_text: text,
+        translated_text: String::new(),
+    }));
+
+    let sw = GetSystemMetrics(SM_CXSCREEN);
+    let sh = GetSystemMetrics(SM_CYSCREEN);
+    let win_w = 620i32.min(sw - 80).max(360);
+    let win_h = 460i32.min(sh - 80).max(260);
+    let x = (sw - win_w) / 2;
+    let y = (sh - win_h) / 2;
+
+    let hwnd = CreateWindowExW(
+        WS_EX_TOPMOST,
+        ocr_class_name(),
+        title_w.as_ptr(),
+        WS_OVERLAPPEDWINDOW,
+        x,
+        y,
+        win_w,
+        win_h,
+        null_hwnd(),
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        state as *const c_void,
+    );
+    if hwnd.is_null() {
+        let _ = Box::from_raw(state);
+        window_count_dec_and_maybe_quit();
+        return;
+    }
+
+    (*state).hwnd = hwnd;
+    let _ = ShowWindow(hwnd, SW_SHOW);
+    let _ = SetForegroundWindow(hwnd);
+    let _ = UpdateWindow(hwnd);
+
+    let mut msg: MSG = std::mem::zeroed();
+    while GetMessageW(&mut msg, null_hwnd(), 0, 0) > 0 {
+        let _ = TranslateMessage(&msg);
+        let _ = DispatchMessageW(&msg);
+    }
+}
+
+unsafe extern "system" fn ocr_result_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_NCCREATE => {
+            let cs = lparam as *const CREATESTRUCTW;
+            let state_ptr = (*cs).lpCreateParams as *mut OcrResultState;
+            let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, state_ptr as isize);
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+        WM_CREATE => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OcrResultState;
+            if state_ptr.is_null() {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+            let st = &mut *state_ptr;
+            st.hwnd = hwnd;
+
+            let face = wide_vec("Microsoft YaHei");
+            let font = CreateFontW(
+                -18, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, face.as_ptr(),
+            );
+            st.font = font;
+            st.edit_brush = CreateSolidBrush(OCR_EDIT_BG);
+
+            let edit_class = wide_vec("Edit");
+            let edit = CreateWindowExW(
+                0,
+                edit_class.as_ptr(),
+                std::ptr::null(),
+                WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL
+                    | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | ES_WANTRETURN,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            st.edit = edit;
+            let text_w = wide_vec(&st.text);
+            let _ = SetWindowTextW(edit, text_w.as_ptr());
+            let _ = SendMessageW(edit, WM_SETFONT, font as usize, 1isize);
+
+            let btn_class = wide_vec("Button");
+            let copy_text = wide_vec("复制");
+            let copy_btn = CreateWindowExW(
+                0,
+                btn_class.as_ptr(),
+                copy_text.as_ptr(),
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            st.copy_btn = copy_btn;
+
+            // 翻译按钮（仅在非错误状态下创建，错误窗口不显示翻译入口）
+            if !st.is_error {
+                let translate_text = wide_vec("翻译");
+                let translate_btn = CreateWindowExW(
+                    0,
+                    btn_class.as_ptr(),
+                    translate_text.as_ptr(),
+                    WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+                st.translate_btn = translate_btn;
+                let _ = SendMessageW(translate_btn, WM_SETFONT, font as usize, 1isize);
+            }
+
+            let close_text = wide_vec("关闭");
+            let close_btn = CreateWindowExW(
+                0,
+                btn_class.as_ptr(),
+                close_text.as_ptr(),
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            st.close_btn = close_btn;
+            let _ = SendMessageW(copy_btn, WM_SETFONT, font as usize, 1isize);
+            let _ = SendMessageW(close_btn, WM_SETFONT, font as usize, 1isize);
+
+            let _ = SendMessageW(edit, EM_SETSEL, 0, -1isize);
+            return 0;
+        }
+        WM_ERASEBKGND => {
+            let hdc = wparam as *mut c_void as HDC;
+            let mut rc: RECT = std::mem::zeroed();
+            let _ = GetClientRect(hwnd, &mut rc);
+            let brush = CreateSolidBrush(OCR_BG);
+            let _ = FillRect(hdc, &rc, brush);
+            let _ = DeleteObject(brush);
+            return 1;
+        }
+        WM_CTLCOLORSTATIC => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OcrResultState;
+            if state_ptr.is_null() {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+            let st = &*state_ptr;
+            let hdc = wparam as *mut c_void as HDC;
+            let ctrl = lparam as *mut c_void as HWND;
+            if ctrl == st.edit {
+                let _ = SetTextColor(hdc, OCR_EDIT_TEXT);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                return st.edit_brush as isize as LRESULT;
+            }
+            return DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+        WM_PAINT => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OcrResultState;
+            if state_ptr.is_null() {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+            let st = &*state_ptr;
+            let mut ps: PAINTSTRUCT = std::mem::zeroed();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            if !hdc.is_null() {
+                let mut rc: RECT = std::mem::zeroed();
+                let _ = GetClientRect(hwnd, &mut rc);
+                let brush = CreateSolidBrush(OCR_BG);
+                let _ = FillRect(hdc, &rc, brush);
+                let _ = DeleteObject(brush);
+
+                let _ = SelectObject(hdc, st.font);
+                let _ = SetBkMode(hdc, TRANSPARENT);
+                let _ = SetTextColor(hdc, if st.is_error { 0x008A8AFF } else { OCR_EDIT_TEXT });
+
+                let title = if st.is_error { "OCR 错误" } else { "OCR 识别结果" };
+                let title_w = wide_vec(title);
+                let mut title_rc = RECT {
+                    left: 20,
+                    top: 16,
+                    right: rc.right - 20,
+                    bottom: 46,
+                };
+                let _ = DrawTextW(
+                    hdc,
+                    title_w.as_ptr(),
+                    -1,
+                    &mut title_rc,
+                    DT_SINGLELINE | DT_VCENTER,
+                );
+
+                let _ = SetTextColor(hdc, 0x00B4ADA6);
+                let subtitle = "可在下方选择文本，或直接复制全部识别结果";
+                let subtitle_w = wide_vec(subtitle);
+                let mut subtitle_rc = RECT {
+                    left: 20,
+                    top: 46,
+                    right: rc.right - 20,
+                    bottom: 70,
+                };
+                let _ = DrawTextW(
+                    hdc,
+                    subtitle_w.as_ptr(),
+                    -1,
+                    &mut subtitle_rc,
+                    DT_SINGLELINE | DT_VCENTER,
+                );
+                let _ = EndPaint(hwnd, &ps);
+            }
+            return 0;
+        }
+        WM_SIZE => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OcrResultState;
+            if state_ptr.is_null() {
+                return 0;
+            }
+            let st = &*state_ptr;
+            let l = lparam as u32;
+            let cw = (l & 0xFFFF) as i16 as i32;
+            let ch = ((l >> 16) & 0xFFFF) as i16 as i32;
+            let margin = 20;
+            let header_h = 76;
+            let gap = 14;
+            let btn_w = 108;
+            let btn_h = 38;
+            let edit_h = ch - header_h - btn_h - gap - margin;
+            if edit_h > 0 {
+                let _ = MoveWindow(st.edit, margin, header_h, cw - margin * 2, edit_h, 1);
+            }
+            let btn_y = ch - btn_h - margin;
+            let has_translate = !st.is_error && !st.translate_btn.is_null();
+            let btn_count = if has_translate { 3 } else { 2 };
+            let total_btn_w = btn_w * btn_count + gap * (btn_count - 1);
+            let bx = (cw - total_btn_w) / 2;
+            let _ = MoveWindow(st.copy_btn, bx, btn_y, btn_w, btn_h, 1);
+            if has_translate {
+                let _ = MoveWindow(
+                    st.translate_btn,
+                    bx + btn_w + gap,
+                    btn_y,
+                    btn_w,
+                    btn_h,
+                    1,
+                );
+            }
+            let close_idx = if has_translate { 2 } else { 1 };
+            let _ = MoveWindow(
+                st.close_btn,
+                bx + (btn_w + gap) * close_idx,
+                btn_y,
+                btn_w,
+                btn_h,
+                1,
+            );
+            return 0;
+        }
+        WM_COMMAND => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OcrResultState;
+            if state_ptr.is_null() {
+                return 0;
+            }
+            let st = &mut *state_ptr;
+            let ctrl = lparam as *mut c_void as HWND;
+            if ctrl == st.copy_btn {
+                use tauri_plugin_clipboard_manager::ClipboardExt;
+                let _ = st.app.clipboard().write_text(&st.text);
+            } else if ctrl == st.translate_btn {
+                handle_translate_click(st);
+            } else if ctrl == st.close_btn {
+                let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            }
+            return 0;
+        }
+        WM_APP_TRANSLATE_DONE => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OcrResultState;
+            if state_ptr.is_null() {
+                return 0;
+            }
+            let st = &mut *state_ptr;
+            let payload = Box::from_raw(wparam as *mut TranslateDonePayload);
+            st.translating = false;
+            if payload.ok {
+                st.translated_text = payload.text.clone();
+                // 切换到译文显示
+                st.text = payload.text;
+                st.showing_translation = true;
+                let text_w = wide_vec(&st.text);
+                let _ = SetWindowTextW(st.edit, text_w.as_ptr());
+                let label = wide_vec("原文");
+                let _ = SetWindowTextW(st.translate_btn, label.as_ptr());
+            } else {
+                // 翻译失败：在 EDIT 中追加错误信息，按钮恢复「翻译」
+                let err_text = format!("\r\n\r\n[翻译失败] {}\r\n", payload.text);
+                st.text.push_str(&err_text);
+                let text_w = wide_vec(&st.text);
+                let _ = SetWindowTextW(st.edit, text_w.as_ptr());
+                let label = wide_vec("翻译");
+                let _ = SetWindowTextW(st.translate_btn, label.as_ptr());
+            }
+            let _ = InvalidateRect(st.translate_btn, std::ptr::null(), 1);
+            return 0;
+        }
+        WM_DRAWITEM => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OcrResultState;
+            if state_ptr.is_null() {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+            let st = &*state_ptr;
+            let dis = &*(lparam as *const DRAWITEMSTRUCT);
+            let is_copy = dis.hwndItem == st.copy_btn;
+            let is_translate = dis.hwndItem == st.translate_btn;
+            let is_close = dis.hwndItem == st.close_btn;
+            if !is_copy && !is_translate && !is_close {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
+            let pressed = (dis.itemState & ODS_SELECTED) != 0;
+            let hot = (dis.itemState & ODS_HOTLIGHT) != 0;
+            // 读取按钮当前文字（已用 SetWindowTextW 更新为「翻译中」/「原文」等）
+            let mut label_buf = [0u16; 16];
+            let len = GetWindowTextW(dis.hwndItem, label_buf.as_mut_ptr(), label_buf.len() as i32);
+            let label = String::from_utf16_lossy(&label_buf[..len.max(0) as usize]);
+            let (bg_normal, bg_hot, bg_pressed) = if is_copy {
+                (OCR_BTN_COPY, OCR_BTN_COPY_H, OCR_BTN_COPY_P)
+            } else if is_translate {
+                (OCR_BTN_TRANSLATE, OCR_BTN_TRANSLATE_H, OCR_BTN_TRANSLATE_P)
+            } else {
+                (OCR_BTN_CLOSE, OCR_BTN_CLOSE_H, OCR_BTN_CLOSE_P)
+            };
+            draw_ocr_button(
+                dis.hDC,
+                dis.rcItem,
+                st.font,
+                &label,
+                bg_normal,
+                bg_hot,
+                bg_pressed,
+                pressed,
+                hot,
+            );
+            return 1;
+        }
+        WM_DESTROY => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OcrResultState;
+            if !state_ptr.is_null() {
+                let st = &mut *state_ptr;
+                if !st.font.is_null() {
+                    let _ = DeleteObject(st.font);
+                }
+                if !st.edit_brush.is_null() {
+                    let _ = DeleteObject(st.edit_brush);
+                }
+                let _ = Box::from_raw(state_ptr);
+            }
+            window_count_dec_and_maybe_quit();
+            return 0;
+        }
+        _ => {}
+    }
+    DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
 // ---------------------------------------------------------------------------
@@ -1280,6 +1851,17 @@ fn pin_class_name() -> PCWSTR {
     }
 }
 
+fn ocr_class_name() -> PCWSTR {
+    static mut NAME: PCWSTR = std::ptr::null();
+    static ONCE: Once = Once::new();
+    unsafe {
+        ONCE.call_once(|| {
+            NAME = leak_wide("ToolBoxOcrResult");
+        });
+        NAME
+    }
+}
+
 unsafe fn register_classes() {
     let hcursor = LoadCursorW(std::ptr::null_mut(), IDC_ARROW);
     let overlay_cls = WNDCLASSEXW {
@@ -1313,6 +1895,22 @@ unsafe fn register_classes() {
         hIconSm: std::ptr::null_mut(),
     };
     let _ = RegisterClassExW(&pin_cls);
+
+    let ocr_cls = WNDCLASSEXW {
+        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(ocr_result_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: std::ptr::null_mut(),
+        hIcon: std::ptr::null_mut(),
+        hCursor: hcursor,
+        hbrBackground: (COLOR_BTNFACE + 1) as *mut c_void as HBRUSH,
+        lpszMenuName: std::ptr::null(),
+        lpszClassName: ocr_class_name(),
+        hIconSm: std::ptr::null_mut(),
+    };
+    let _ = RegisterClassExW(&ocr_cls);
 }
 
 /// 启动纯原生截图：在独立线程抓屏、显示 overlay、处理选区与动作。

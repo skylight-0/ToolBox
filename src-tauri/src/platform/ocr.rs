@@ -65,7 +65,7 @@ pub fn run_ocr(rgba: &[u8], width: u32, height: u32) -> Result<OcrOutput, String
         .join()
         .map_err(|e| format!("OCR 识别失败: {}", e))?;
 
-    let text = result.Text().map(|s| s.to_string()).unwrap_or_default();
+    let text = normalize_ocr_text(&result.Text().map(|s| s.to_string()).unwrap_or_default());
 
     let lines_view = result
         .Lines()
@@ -79,7 +79,7 @@ pub fn run_ocr(rgba: &[u8], width: u32, height: u32) -> Result<OcrOutput, String
         let line = lines_view
             .GetAt(i)
             .map_err(|e| format!("读取第 {} 行失败: {}", i, e))?;
-        let line_text = line.Text().map(|s| s.to_string()).unwrap_or_default();
+        let line_text = normalize_ocr_text(&line.Text().map(|s| s.to_string()).unwrap_or_default());
 
         let (mut min_x, mut min_y, mut max_x, mut max_y) =
             (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -170,4 +170,70 @@ fn pick_engine() -> Result<OcrEngine, String> {
         return Err("创建 OCR 引擎失败：所选语言不可用".to_string());
     }
     Ok(engine)
+}
+
+fn normalize_ocr_text(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut normalized = String::with_capacity(text.len());
+
+    for (idx, ch) in chars.iter().copied().enumerate() {
+        if is_inline_space(ch) {
+            let prev = previous_non_space(&chars, idx);
+            let next = next_non_space(&chars, idx + 1);
+            if should_suppress_ocr_space(prev, next) {
+                continue;
+            }
+        }
+        normalized.push(ch);
+    }
+
+    normalized
+}
+
+fn previous_non_space(chars: &[char], end: usize) -> Option<char> {
+    chars[..end]
+        .iter()
+        .rev()
+        .copied()
+        .find(|ch| !is_inline_space(*ch))
+}
+
+fn next_non_space(chars: &[char], start: usize) -> Option<char> {
+    chars[start..]
+        .iter()
+        .copied()
+        .find(|ch| !is_inline_space(*ch))
+}
+
+fn should_suppress_ocr_space(prev: Option<char>, next: Option<char>) -> bool {
+    match (prev, next) {
+        (Some(left), Some(right)) => {
+            (is_cjk(left) && (is_cjk(right) || is_cjk_punctuation(right)))
+                || (is_cjk_punctuation(left) && is_cjk(right))
+        }
+        _ => false,
+    }
+}
+
+fn is_inline_space(ch: char) -> bool {
+    ch.is_whitespace() && ch != '\n' && ch != '\r'
+}
+
+fn is_cjk(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x3040..=0x30FF
+            | 0xAC00..=0xD7AF
+    )
+}
+
+fn is_cjk_punctuation(ch: char) -> bool {
+    matches!(
+        ch,
+        '，' | '。' | '、' | '；' | '：' | '！' | '？' | '（' | '）' | '《' | '》' | '“'
+            | '”' | '‘' | '’' | '【' | '】' | '「' | '」' | '『' | '』'
+    )
 }
