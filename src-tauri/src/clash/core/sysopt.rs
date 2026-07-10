@@ -107,15 +107,25 @@ impl Sysopt {
             InternetSetOptionW, INTERNET_OPTION_REFRESH, INTERNET_OPTION_SETTINGS_CHANGED,
         };
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            HWND_BROADCAST, SendMessageW, WM_SETTINGCHANGE,
+            HWND_BROADCAST, SendMessageTimeoutW, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_SETTINGCHANGE,
         };
 
         unsafe {
             // 通知 WinINet 注册表已变更，使其立即重新读取设置
             let _ = InternetSetOptionW(std::ptr::null(), INTERNET_OPTION_SETTINGS_CHANGED, std::ptr::null(), 0);
             let _ = InternetSetOptionW(std::ptr::null(), INTERNET_OPTION_REFRESH, std::ptr::null(), 0);
-            // 通知顶层窗口刷新环境
-            SendMessageW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, 0);
+            // 通知顶层窗口刷新环境。改用 SendMessageTimeoutW（带 SMTO_ABORTIFHUNG），
+            // 避免被某个挂起/无响应窗口的窗口过程同步阻塞，导致调用方主线程卡死 UI 未响应。
+            let mut result: usize = 0;
+            let _ = SendMessageTimeoutW(
+                HWND_BROADCAST,
+                WM_SETTINGCHANGE,
+                0,
+                0,
+                SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                1000,
+                &mut result,
+            );
         }
         Ok(())
     }

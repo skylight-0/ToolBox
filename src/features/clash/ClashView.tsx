@@ -77,7 +77,7 @@ function ClashView({ onBack }: ClashViewProps) {
   }, [clash, running, sysProxyOn]);
 
   return (
-    <>
+    <div className="sub-view">
       <SubViewHeader title="Clash 代理" onBack={onBack} actions={headerActions} />
       <div className="sub-view-content">
         <div className="clash-tabs">
@@ -131,7 +131,7 @@ function ClashView({ onBack }: ClashViewProps) {
           />
         )}
       </div>
-    </>
+    </div>
   );
 }
 

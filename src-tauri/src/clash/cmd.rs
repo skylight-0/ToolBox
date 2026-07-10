@@ -71,21 +71,29 @@ pub fn clash_get_info() -> ClashInfo {
 
 /// 获取系统代理配置
 #[tauri::command]
-pub fn clash_get_sysproxy() -> SysproxyConfig {
-    Sysopt::global().get_sysproxy()
+pub async fn clash_get_sysproxy() -> Result<SysproxyConfig, String> {
+    // 系统代理命令涉及注册表读写 + 广播 WM_SETTINGCHANGE，
+    // 放进 spawn_blocking 避免 Tauri v2 同步命令占用主 UI 线程导致界面卡死。
+    tokio::task::spawn_blocking(|| Sysopt::global().get_sysproxy())
+        .await
+        .map_err(|e| format!("获取系统代理失败: {}", e))
 }
 
 /// 设置系统代理
 #[tauri::command]
-pub fn clash_set_sysproxy(config: SysproxyConfig) -> Result<(), String> {
-    Sysopt::global().set_sysproxy(config)
+pub async fn clash_set_sysproxy(config: SysproxyConfig) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || Sysopt::global().set_sysproxy(config))
+        .await
+        .map_err(|e| format!("设置系统代理失败(任务): {}", e))?
         .map_err(|e| format!("设置系统代理失败: {}", e))
 }
 
 /// 重置系统代理
 #[tauri::command]
-pub fn clash_reset_sysproxy() -> Result<(), String> {
-    Sysopt::global().reset_sysproxy()
+pub async fn clash_reset_sysproxy() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| Sysopt::global().reset_sysproxy())
+        .await
+        .map_err(|e| format!("重置系统代理失败(任务): {}", e))?
         .map_err(|e| format!("重置系统代理失败: {}", e))
 }
 
