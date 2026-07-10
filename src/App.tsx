@@ -20,6 +20,7 @@ import {
 } from "./features/clipboard/clipboardModel";
 import JsonToolView from "./features/json/JsonToolView";
 import NetworkToolView from "./features/network/NetworkToolView";
+import ClashView from "./features/clash/ClashView";
 import PasswordView from "./features/password/PasswordView";
 import PingMonitorView from "./features/pingmonitor/PingMonitorView";
 import ConnectionMonitorView from "./features/connectionmonitor/ConnectionMonitorView";
@@ -1417,6 +1418,7 @@ function App() {
         onShortcutToggle={updateScreenshotShortcut}
       />
     ),
+    clash: <ClashView onBack={() => setActiveView("main")} />,
     settings: (
       <SettingsView
         onBack={() => setActiveView("main")}

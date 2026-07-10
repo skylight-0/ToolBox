@@ -14,6 +14,7 @@ export type ActiveView =
   | "textmanager"
   | "pomodoro"
   | "screenshot"
+  | "clash"
   | "settings";
 
 export type ViewToolId = Exclude<ActiveView, "main">;

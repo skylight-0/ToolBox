@@ -56,6 +56,7 @@ pub(crate) struct OcrOutput {
 
 mod platform;
 mod launcher;
+mod clash;
 
 pub(crate) struct AppState {
     sidebar_width: Mutex<u32>,
@@ -2444,6 +2445,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_shell::init())
         .on_window_event(|window, event| match event {
             // 在底层直接监听系统窗口级别的失焦事件
             tauri::WindowEvent::Focused(focused) => {
@@ -2556,7 +2558,24 @@ pub fn run() {
             launcher::launcher_open_external,
             launcher::launcher_list_dir,
             launcher::launcher_get_default_open_mode,
-            launcher::launcher_set_default_open_mode
+            launcher::launcher_set_default_open_mode,
+            clash::cmd::clash_start_core,
+            clash::cmd::clash_stop_core,
+            clash::cmd::clash_restart_core,
+            clash::cmd::clash_get_running_mode,
+            clash::cmd::clash_get_info,
+            clash::cmd::clash_get_sysproxy,
+            clash::cmd::clash_set_sysproxy,
+            clash::cmd::clash_reset_sysproxy,
+            clash::cmd::clash_get_profiles,
+            clash::cmd::clash_import_profile,
+            clash::cmd::clash_delete_profile,
+            clash::cmd::clash_select_profile,
+            clash::cmd::clash_update_profile,
+            clash::cmd::clash_test_proxy_delay,
+            clash::cmd::clash_test_group_delay,
+            clash::cmd::clash_get_proxy_groups,
+            clash::cmd::clash_select_proxy
         ])
         .setup(|app| {
             let app_data_dir = app
@@ -2574,6 +2593,17 @@ pub fn run() {
                 sidebar_is_closing: Mutex::new(false),
                 clipboard_db_path,
             });
+
+            // 初始化 Clash 内核与 Profile 管理器
+            {
+                use clash::core::manager::CoreManager;
+                use clash::config::profile::ProfileManager;
+                CoreManager::global().init(app.handle().clone());
+                let clash_config_dir = app_data_dir.join("clash");
+                fs::create_dir_all(&clash_config_dir)
+                    .map_err(|error| format!("创建 Clash 配置目录失败: {}", error))?;
+                ProfileManager::global().init(app.handle().clone(), clash_config_dir);
+            }
 
             // 注册 Alt+Space 全局快捷键
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -2751,6 +2781,16 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            // 进程退出前做兜底清理：kill mihomo sidecar 并关闭系统代理。
+            // 不走 async lifecycle_lock——这时尚未退出 tokio runtime，但
+            // Exit 阶段已无机会再 await，故调用同步的 force_cleanup_sync。
+            // 与 mihomo-demo 主函数末尾的"退出清理"对应。
+            if let tauri::RunEvent::Exit = event {
+                log::info!("[Clash] RunEvent::Exit，执行退出清理...");
+                crate::clash::core::manager::CoreManager::global().force_cleanup_sync();
+            }
+        });
 }

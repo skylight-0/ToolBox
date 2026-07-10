@@ -17,6 +17,16 @@
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-image",
     "clipboard-manager:allow-write-image",
-    "clipboard-manager:allow-clear"
+    "clipboard-manager:allow-clear",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/mihomo",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
   ]
 }

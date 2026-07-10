@@ -1,5 +1,6 @@
 import type { ToolItem } from "../types/sidebar";
 import clipboardIcon from "../assets/clipboard.svg";
+import clashIcon from "../assets/clash.svg";
 import codecIcon from "../assets/codec.svg";
 import jsonIcon from "../assets/json.svg";
 import networkIcon from "../assets/network.svg";
@@ -26,5 +27,6 @@ export const TOOLS: ToolItem[] = [
   { id: "quicklaunch", kind: "view", view: "quicklaunch", icon: "📌", iconSrc: quickIcon, label: "快捷访问", desc: "常用程序启动" },
   { id: "pomodoro", kind: "view", view: "pomodoro", icon: "🍅", iconSrc: tomatoIcon, label: "番茄钟", desc: "专注与休息计时" },
   { id: "screenshot", kind: "view", view: "screenshot", icon: "📷", label: "截图钉图", desc: "快捷键截图并贴在桌面" },
+  { id: "clash", kind: "view", view: "clash", icon: "🛡", iconSrc: clashIcon, label: "Clash 代理", desc: "系统代理开关与订阅管理" },
   { id: "settings", kind: "view", view: "settings", icon: "⚙️", iconSrc: settingIcon,label: "设置", desc: "启动、剪切板与侧边栏" },
 ];
