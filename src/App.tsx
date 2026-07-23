@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import "./App.css";
 import MainSidebarView from "./components/MainSidebarView";
@@ -9,8 +9,8 @@ import type { CommandPaletteResult, SidebarNotification } from "./components/Mai
 import { TOOLS } from "./constants/sidebar";
 import desktopIcon from "./assets/icon.svg";
 import taskbarIcon from "./assets/task.svg";
-import CodecToolView from "./features/codec/CodecToolView";
-import ClipboardView from "./features/clipboard/ClipboardView";
+const CodecToolView = lazy(() => import("./features/codec/CodecToolView"));
+const ClipboardView = lazy(() => import("./features/clipboard/ClipboardView"));
 import {
   getClipboardSearchFields,
   isCodeSnippet,
@@ -18,21 +18,21 @@ import {
   type ClipboardRecordInput,
   normalizeClipboardItems,
 } from "./features/clipboard/clipboardModel";
-import JsonToolView from "./features/json/JsonToolView";
-import NetworkToolView from "./features/network/NetworkToolView";
-import ClashView from "./features/clash/ClashView";
-import PasswordView from "./features/password/PasswordView";
-import PingMonitorView from "./features/pingmonitor/PingMonitorView";
-import ConnectionMonitorView from "./features/connectionmonitor/ConnectionMonitorView";
-import PomodoroView from "./features/pomodoro/PomodoroView";
-import QrCodeView from "./features/qrcode/QrCodeView";
-import QuickLaunchView from "./features/quicklaunch/QuickLaunchView";
-import SettingsView from "./features/settings/SettingsView";
+const JsonToolView = lazy(() => import("./features/json/JsonToolView"));
+const NetworkToolView = lazy(() => import("./features/network/NetworkToolView"));
+const ClashView = lazy(() => import("./features/clash/ClashView"));
+const PasswordView = lazy(() => import("./features/password/PasswordView"));
+const PingMonitorView = lazy(() => import("./features/pingmonitor/PingMonitorView"));
+const ConnectionMonitorView = lazy(() => import("./features/connectionmonitor/ConnectionMonitorView"));
+const PomodoroView = lazy(() => import("./features/pomodoro/PomodoroView"));
+const QrCodeView = lazy(() => import("./features/qrcode/QrCodeView"));
+const QuickLaunchView = lazy(() => import("./features/quicklaunch/QuickLaunchView"));
+const SettingsView = lazy(() => import("./features/settings/SettingsView"));
 import type { ClipboardDefaultDateFilter } from "./features/settings/SettingsView";
-import ScreenshotView from "./features/screenshot/ScreenshotView";
-import SystemInfoView from "./features/systeminfo/SystemInfoView";
-import TextManagerView from "./features/textmanager/TextManagerView";
-import TodoView from "./features/todo/TodoView";
+const ScreenshotView = lazy(() => import("./features/screenshot/ScreenshotView"));
+const SystemInfoView = lazy(() => import("./features/systeminfo/SystemInfoView"));
+const TextManagerView = lazy(() => import("./features/textmanager/TextManagerView"));
+const TodoView = lazy(() => import("./features/todo/TodoView"));
 import { notifyToolboxDataChanged, TOOLBOX_DATA_CHANGED } from "./utils/dataSync";
 import type { ActiveView, ToggleSwitchItem, ToolId, ViewToolId } from "./types/sidebar";
 
@@ -250,6 +250,8 @@ function App() {
   const lastClipboardContentRef = useRef("");
   const clipboardCheckInFlightRef = useRef(false);
   const lastClipboardImageCheckAtRef = useRef(0);
+  const searchDataLoaderRef = useRef<(() => void) | null>(null);
+  const searchDataLoadedRef = useRef(false);
   const commandFilters = [
     { id: "all", label: "全部" },
     { id: "actions", label: "动作" },
@@ -491,9 +493,20 @@ function App() {
       ]).catch(console.error);
     };
 
-    loadUnifiedSearchData();
+    searchDataLoaderRef.current = () => {
+      if (searchDataLoadedRef.current) return;
+      searchDataLoadedRef.current = true;
+      loadUnifiedSearchData();
+    };
     const handleDataChanged = (event: Event) => {
       const kind = (event as CustomEvent<{ kind?: string }>).detail?.kind;
+
+      if (!searchDataLoadedRef.current) {
+        if (kind === "notifications") {
+          loadMetaData();
+        }
+        return;
+      }
 
       if (kind === "clipboard") {
         void loadClipboardSearchData().catch(console.error);
@@ -520,6 +533,12 @@ function App() {
     window.addEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
     return () => window.removeEventListener(TOOLBOX_DATA_CHANGED, handleDataChanged);
   }, []);
+
+  useEffect(() => {
+    if (isCommandPaletteOpen) {
+      searchDataLoaderRef.current?.();
+    }
+  }, [isCommandPaletteOpen]);
 
   // Listen for cross-window data changes from the standalone text manager window
   useEffect(() => {
@@ -1490,7 +1509,9 @@ function App() {
             onSwitchClick={handleSwitchClick}
           />
         ) : (
-          renderers[activeView]
+          <Suspense fallback={<div className="sub-view-content">加载中…</div>}>
+            {renderers[activeView]}
+          </Suspense>
         )}
       </div>
       <div className="app-toast-stack">

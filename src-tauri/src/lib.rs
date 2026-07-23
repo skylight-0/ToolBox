@@ -1640,6 +1640,54 @@ fn resize_sidebar(window: tauri::WebviewWindow, state: State<'_, AppState>, widt
 static LAST_DRAWER_TOGGLE: std::sync::OnceLock<Mutex<Option<Instant>>> = std::sync::OnceLock::new();
 const DRAWER_TOGGLE_DEBOUNCE: Duration = Duration::from_millis(450);
 
+fn create_drawer_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if app.get_webview_window("drawer").is_some() {
+        return Ok(());
+    }
+
+    let drawer_window = WebviewWindowBuilder::new(
+        app,
+        "drawer",
+        WebviewUrl::App("/#drawer".into()),
+    )
+    .title("抽屉")
+    .inner_size(1200.0, 380.0)
+    .position(0.0, 0.0)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .resizable(false)
+    .shadow(false)
+    .focused(false)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("预创建抽屉窗口失败: {}", error))?;
+    let _ = drawer_window.hide();
+    Ok(())
+}
+
+fn create_test_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    if let Some(window) = app.get_webview_window("test-window") {
+        return Ok(window);
+    }
+
+    WebviewWindowBuilder::new(app, "test-window", WebviewUrl::App("/#test".into()))
+        .title("测试窗口")
+        .inner_size(300.0, 200.0)
+        .position(100.0, 100.0)
+        .decorations(true)
+        .transparent(false)
+        .always_on_top(true)
+        .skip_taskbar(false)
+        .resizable(false)
+        .shadow(true)
+        .focused(false)
+        .visible(false)
+        .build()
+        .map_err(|error| format!("创建测试窗口失败: {}", error))
+}
+
 // 将抽屉窗口定位到光标所在显示器的顶部，宽度撑满工作区
 fn position_drawer_window(window: &tauri::WebviewWindow) {
     let drawer_height = 380.0;
@@ -1688,6 +1736,13 @@ fn toggle_drawer_window(app_handle: &tauri::AppHandle) {
             }
         }
         *guard = Some(Instant::now());
+    }
+
+    if app_handle.get_webview_window("drawer").is_none() {
+        if let Err(error) = create_drawer_window(app_handle) {
+            log::error!("[drawer] 创建窗口失败: {}", error);
+            return;
+        }
     }
 
     let window = match app_handle.get_webview_window("drawer") {
@@ -2482,17 +2537,20 @@ pub fn run() {
                         // 测试窗口：记录按下时的系统时间戳，前端显示后对比
                         let pressed_at = chrono_like_timestamp();
                         log::info!("[test] Ctrl+Shift+T 按下 t={}", pressed_at);
-                        if let Some(test_window) = app.get_webview_window("test-window") {
-                            let visible = test_window.is_visible().unwrap_or(false);
-                            if visible {
-                                let _ = test_window.hide();
-                                log::info!("[test] 测试窗口隐藏");
-                            } else {
-                                let _ = test_window.emit("test-show", pressed_at);
-                                let _ = test_window.show();
-                                let _ = test_window.set_focus();
-                                log::info!("[test] 测试窗口 show 调用完成");
+                        match create_test_window(app) {
+                            Ok(test_window) => {
+                                let visible = test_window.is_visible().unwrap_or(false);
+                                if visible {
+                                    let _ = test_window.hide();
+                                    log::info!("[test] 测试窗口隐藏");
+                                } else {
+                                    let _ = test_window.emit("test-show", pressed_at);
+                                    let _ = test_window.show();
+                                    let _ = test_window.set_focus();
+                                    log::info!("[test] 测试窗口 show 调用完成");
+                                }
                             }
+                            Err(error) => log::error!("[test] 创建测试窗口失败: {}", error),
                         }
                     }
                     if event.state == ShortcutState::Pressed
@@ -2631,28 +2689,7 @@ pub fn run() {
                 log::error!("注册全局快捷键 Alt+Q 失败: {}", error);
             }
 
-            // 预创建下拉抽屉窗口（隐藏），Alt+Q 唤出从桌面顶部下滑
-            if app.get_webview_window("drawer").is_none() {
-                let drawer_window = WebviewWindowBuilder::new(
-                    app,
-                    "drawer",
-                    WebviewUrl::App("/#drawer".into()),
-                )
-                .title("抽屉")
-                .inner_size(1200.0, 380.0)
-                .position(0.0, 0.0)
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .resizable(false)
-                .shadow(false)
-                .focused(true)
-                .visible(false)
-                .build()
-                .map_err(|error| format!("预创建抽屉窗口失败: {}", error))?;
-                let _ = drawer_window.hide();
-            }
+            // 抽屉窗口改为首次 Alt+Q 时创建，避免冷启动阶段额外加载一个 WebView。
 
             // 注册截图快捷键 Ctrl+Shift+A（受设置项控制，默认开启）
             let screenshot_shortcut_enabled = {
@@ -2693,28 +2730,7 @@ pub fn run() {
             // 截图 overlay 与钉图右键菜单现已改为纯原生 Win32 窗口（见
             // platform::screenshot_native），不再预创建 WebView，省去冷启动与内存开销。
 
-            // 预创建测试窗口（隐藏），Ctrl+Shift+T 唤出用于测量延迟
-            if app.get_webview_window("test-window").is_none() {
-                let test_window = WebviewWindowBuilder::new(
-                    app,
-                    "test-window",
-                    WebviewUrl::App("/#test".into()),
-                )
-                .title("测试窗口")
-                .inner_size(300.0, 200.0)
-                .position(100.0, 100.0)
-                .decorations(true)
-                .transparent(false)
-                .always_on_top(true)
-                .skip_taskbar(false)
-                .resizable(false)
-                .shadow(true)
-                .focused(true)
-                .visible(false)
-                .build()
-                .map_err(|error| format!("预创建测试窗口失败: {}", error))?;
-                let _ = test_window.hide();
-            }
+            // 测试窗口改为首次 Ctrl+Shift+T 时创建，避免影响正常冷启动。
             use tauri_plugin_autostart::ManagerExt;
 
             // 获取开机自启状态
@@ -2778,6 +2794,18 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // 在 setup 返回后异步预热抽屉，避免阻塞冷启动，同时降低首次 Alt+Q 的创建延迟。
+            let warmup_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::task::yield_now().await;
+                let create_app = warmup_app.clone();
+                let _ = warmup_app.run_on_main_thread(move || {
+                    if let Err(error) = create_drawer_window(&create_app) {
+                        log::debug!("[drawer] 异步预热失败，将在首次唤起时重试: {}", error);
+                    }
+                });
+            });
 
             Ok(())
         })
